@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "git-explain"
+version = "0.1.0"
+description = "CLI that suggests git add/commit from diffs using Gemini"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+  { name = "git-explain contributors" },
+]
+keywords = ["git", "cli", "commit", "ai", "gemini"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Version Control :: Git",
+]
+urls = { Homepage = "https://github.com/nazarli-shabnam/git-explain", Source = "https://github.com/nazarli-shabnam/git-explain" }
+dependencies = [
+    "google-genai>=1.50.0",
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+git-explain = "git_explain.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["git_explain*"]
