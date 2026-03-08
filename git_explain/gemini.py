@@ -60,7 +60,9 @@ def _is_generic_message(message: str) -> bool:
     if msg in _GENERIC_MESSAGES:
         return True
     # "update X" is okay, but bare "update" or "update stuff" isn't
-    if re.fullmatch(r"(update|updates|change|changes|refactor|refactoring|misc)(\s+.+)?", msg):
+    if re.fullmatch(
+        r"(update|updates|change|changes|refactor|refactoring|misc)(\s+.+)?", msg
+    ):
         return msg in _GENERIC_MESSAGES or len(msg.split()) < 2
     if len(msg) < 12:
         return True
@@ -69,7 +71,9 @@ def _is_generic_message(message: str) -> bool:
 
 def _fallback_type_and_message(files: list[str]) -> tuple[str, str]:
     # Backward-compat wrapper (shouldn't be used now that we parse status codes)
-    return _fallback_type_and_message_with_context(files=files, added_any=False, has_commits=True)
+    return _fallback_type_and_message_with_context(
+        files=files, added_any=False, has_commits=True
+    )
 
 
 def _fallback_type_and_message_with_context(
@@ -83,13 +87,21 @@ def _fallback_type_and_message_with_context(
     docs_exts = {".md", ".rst", ".txt"}
     code_exts = {".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java"}
 
-    is_doc = lambda f: os.path.splitext(f)[1].lower() in docs_exts or f.endswith(("readme", "readme.md", "features.md"))
-    is_code = lambda f: os.path.splitext(f)[1].lower() in code_exts
-    is_packaging = lambda f: f.endswith(("pyproject.toml", "requirements.txt", "setup.cfg", "setup.py"))
+    def is_doc(f: str) -> bool:
+        return os.path.splitext(f)[1].lower() in docs_exts or f.endswith(
+            ("readme", "readme.md", "features.md")
+        )
+
+    def is_code(f: str) -> bool:
+        return os.path.splitext(f)[1].lower() in code_exts
+
+    def is_packaging(f: str) -> bool:
+        return f.endswith(
+            ("pyproject.toml", "requirements.txt", "setup.cfg", "setup.py")
+        )
 
     docs_only = files and all(is_doc(f) for f in lower)
     touches_docs = any(is_doc(f) for f in lower)
-    touches_code = any(is_code(f) for f in lower)
     touches_packaging = any(is_packaging(f) for f in lower)
 
     verb = "Add" if (added_any or has_commits is False) else "Update"
@@ -108,7 +120,9 @@ def _fallback_type_and_message_with_context(
         topics.append("FEATURES doc")
     if touches_docs and not docs_only:
         topics.append("docs")
-    if any(f.startswith("git_explain/") for f in lower) or any("/git_explain/" in f for f in lower):
+    if any(f.startswith("git_explain/") for f in lower) or any(
+        "/git_explain/" in f for f in lower
+    ):
         topics.append("git-explain CLI")
     if any("git_explain/gemini.py" in f for f in lower):
         topics.append("Gemini integration")
@@ -185,7 +199,9 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
-def suggest_commands(diff: str, model: str | None = None) -> tuple[Suggestion | None, str]:
+def suggest_commands(
+    diff: str, model: str | None = None
+) -> tuple[Suggestion | None, str]:
     """Call Gemini with the file list; return (suggestion, raw_response). suggestion is None if unparseable."""
     if not diff or not diff.strip():
         return None, ""
@@ -207,10 +223,16 @@ def suggest_commands(diff: str, model: str | None = None) -> tuple[Suggestion | 
         except Exception as e:
             last_err = e
             err_str = str(e).lower()
-            if attempt == 0 and ("429" in err_str or "resource_exhausted" in err_str or "quota" in err_str):
+            if attempt == 0 and (
+                "429" in err_str
+                or "resource_exhausted" in err_str
+                or "quota" in err_str
+            ):
                 wait = 15
                 if "retry in " in err_str:
-                    m = re.search(r"retry in (\d+(?:\.\d+)?)\s*s", err_str, re.IGNORECASE)
+                    m = re.search(
+                        r"retry in (\d+(?:\.\d+)?)\s*s", err_str, re.IGNORECASE
+                    )
                     if m:
                         wait = min(60, max(5, int(float(m.group(1)) + 1)))
                 time.sleep(wait)
@@ -255,7 +277,9 @@ def suggest_commands(diff: str, model: str | None = None) -> tuple[Suggestion | 
         add_args = all_paths
 
     # If we're adding new files (or this is an initial commit), don't label it REFACTOR
-    docs_only = all_paths and all(os.path.splitext(p)[1].lower() in {".md", ".rst", ".txt"} for p in all_paths)
+    docs_only = all_paths and all(
+        os.path.splitext(p)[1].lower() in {".md", ".rst", ".txt"} for p in all_paths
+    )
     if (added_any or has_commits is False) and commit_type == "REFACTOR":
         commit_type = "DOCS" if docs_only else "FEAT"
 
@@ -263,4 +287,6 @@ def suggest_commands(diff: str, model: str | None = None) -> tuple[Suggestion | 
         commit_type, commit_message = _fallback_type_and_message_with_context(
             files=add_args, added_any=added_any, has_commits=has_commits
         )
-    return Suggestion(add_args=add_args, commit_type=commit_type, commit_message=commit_message), raw
+    return Suggestion(
+        add_args=add_args, commit_type=commit_type, commit_message=commit_message
+    ), raw
