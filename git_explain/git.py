@@ -42,7 +42,9 @@ def repo_has_commits(cwd: str | Path | None = None) -> bool:
     return result.returncode == 0
 
 
-def _name_status(args: list[str], cwd: str | Path | None = None) -> list[tuple[str, str]]:
+def _name_status(
+    args: list[str], cwd: str | Path | None = None
+) -> list[tuple[str, str]]:
     """Run a git command that outputs --name-status and return (status, path) pairs.
 
     Normalizes rename/copy lines to ('R', new_path) or ('C', new_path).

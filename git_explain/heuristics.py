@@ -25,7 +25,11 @@ CONFIG_EXTS = {".toml", ".yml", ".yaml", ".json", ".ini", ".cfg", ".lock"}
 def _is_doc(path: str) -> bool:
     p = path.lower()
     base = os.path.basename(p)
-    return os.path.splitext(p)[1] in DOC_EXTS or base in {"readme", "readme.md", "features.md"}
+    return os.path.splitext(p)[1] in DOC_EXTS or base in {
+        "readme",
+        "readme.md",
+        "features.md",
+    }
 
 
 def _is_test(path: str) -> bool:
@@ -33,7 +37,12 @@ def _is_test(path: str) -> bool:
     base = os.path.basename(p)
     if p.startswith("tests/") or "/tests/" in p:
         return True
-    if base.startswith("test_") or base.endswith("_test.py") or base.endswith(".spec.ts") or base.endswith(".spec.tsx"):
+    if (
+        base.startswith("test_")
+        or base.endswith("_test.py")
+        or base.endswith(".spec.ts")
+        or base.endswith(".spec.tsx")
+    ):
         return True
     return any(h in p for h in TEST_HINTS)
 
@@ -105,4 +114,3 @@ def suggest_from_changes(
         message = message.replace("Add ", "Add initial ", 1)
 
     return Suggestion(add_args=paths, commit_type=commit_type, commit_message=message)
-

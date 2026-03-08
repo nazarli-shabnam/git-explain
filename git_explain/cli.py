@@ -20,6 +20,7 @@ load_dotenv()
 app = typer.Typer()
 console = Console()
 
+
 @dataclass(frozen=True)
 class Change:
     status: str  # A/M/D/R/C
@@ -48,7 +49,9 @@ def _parse_combined(combined: str) -> tuple[bool | None, list[Change]]:
             if v in ("true", "false"):
                 has_commits = v == "true"
             continue
-        m = __import__("re").match(r"^([AMDRC])\s+(.+)$", line, __import__("re").IGNORECASE)
+        m = __import__("re").match(
+            r"^([AMDRC])\s+(.+)$", line, __import__("re").IGNORECASE
+        )
         if not m:
             continue
         status = m.group(1).upper()
@@ -76,7 +79,9 @@ def _parse_combined(combined: str) -> tuple[bool | None, list[Change]]:
     return has_commits, changes
 
 
-def _render_combined(has_commits: bool | None, items: Iterable[tuple[str, str]], title: str) -> str:
+def _render_combined(
+    has_commits: bool | None, items: Iterable[tuple[str, str]], title: str
+) -> str:
     parts = []
     if has_commits is not None:
         parts.append("## Meta\nhas_commits: " + ("true" if has_commits else "false"))
@@ -117,7 +122,9 @@ def _group_changes(changes: list[tuple[str, str]]) -> dict[str, list[tuple[str, 
     # Simple grouping: docs, tests, config, code, other
     def is_doc(p: str) -> bool:
         p2 = p.lower()
-        return p2.endswith((".md", ".rst", ".txt")) or p2.endswith(("readme", "readme.md", "features.md"))
+        return p2.endswith((".md", ".rst", ".txt")) or p2.endswith(
+            ("readme", "readme.md", "features.md")
+        )
 
     def is_test(p: str) -> bool:
         p2 = p.lower().replace("\\", "/")
@@ -133,11 +140,21 @@ def _group_changes(changes: list[tuple[str, str]]) -> dict[str, list[tuple[str, 
     def is_config(p: str) -> bool:
         p2 = p.lower()
         base = p2.split("/")[-1].split("\\")[-1]
-        return base in {"pyproject.toml", "requirements.txt", "setup.cfg", "setup.py", ".gitignore"} or p2.endswith(
-            (".toml", ".yml", ".yaml", ".json", ".ini", ".cfg", ".lock")
-        )
+        return base in {
+            "pyproject.toml",
+            "requirements.txt",
+            "setup.cfg",
+            "setup.py",
+            ".gitignore",
+        } or p2.endswith((".toml", ".yml", ".yaml", ".json", ".ini", ".cfg", ".lock"))
 
-    groups: dict[str, list[tuple[str, str]]] = {"docs": [], "tests": [], "config": [], "code": [], "other": []}
+    groups: dict[str, list[tuple[str, str]]] = {
+        "docs": [],
+        "tests": [],
+        "config": [],
+        "code": [],
+        "other": [],
+    }
     for st, p in changes:
         if is_doc(p):
             groups["docs"].append((st, p))
@@ -155,21 +172,32 @@ def _group_changes(changes: list[tuple[str, str]]) -> dict[str, list[tuple[str, 
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    auto: bool = typer.Option(False, "--auto", help="Apply suggestion without prompting"),
-    ai: bool = typer.Option(False, "--ai", help="Use Gemini to suggest commit message (default: off)"),
+    auto: bool = typer.Option(
+        False, "--auto", help="Apply suggestion without prompting"
+    ),
+    ai: bool = typer.Option(
+        False, "--ai", help="Use Gemini to suggest commit message (default: off)"
+    ),
     staged_only: bool = typer.Option(
         False,
         "--staged-only",
         help="Commit only already-staged changes (do not run git add). Useful for partial staging.",
     ),
-    cwd: str | None = typer.Option(None, "--cwd", help="Working directory (default: current)"),
+    cwd: str | None = typer.Option(
+        None, "--cwd", help="Working directory (default: current)"
+    ),
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
     run(cwd=Path(cwd) if cwd else None, auto=auto, ai=ai, staged_only=staged_only)
 
 
-def run(cwd: Path | None = None, auto: bool = False, ai: bool = False, staged_only: bool = False) -> None:
+def run(
+    cwd: Path | None = None,
+    auto: bool = False,
+    ai: bool = False,
+    staged_only: bool = False,
+) -> None:
     console.print(Text("git-explain", style="bold"))
     try:
         combined, repo_root = get_combined_diff(cwd=cwd)
@@ -184,7 +212,9 @@ def run(cwd: Path | None = None, auto: bool = False, ai: bool = False, staged_on
 
     if staged_only:
         changes = [c for c in changes if "Staged" in c.sections]
-        console.print("[dim]Note:[/dim] staged-only mode: only already-staged files are selectable.")
+        console.print(
+            "[dim]Note:[/dim] staged-only mode: only already-staged files are selectable."
+        )
 
     if not changes:
         console.print("[yellow]No selectable changes found.[/yellow]")
@@ -195,14 +225,18 @@ def run(cwd: Path | None = None, auto: bool = False, ai: bool = False, staged_on
         sec = ",".join([s.lower() for s in ch.sections if s and s != "Meta"])
         lines.append(f"{idx:>2}. [{ch.status}] ({sec}) {ch.path}")
     console.print(Panel("\n".join(lines), title="Select files", border_style="blue"))
-    selection = typer.prompt("Select files to include (e.g. 1,2,5-7 or 'all')", default="all")
+    selection = typer.prompt(
+        "Select files to include (e.g. 1,2,5-7 or 'all')", default="all"
+    )
     picks = _parse_selection(selection, len(changes))
     if not picks:
         console.print("[yellow]No files selected.[/yellow]")
         return
     selected = [changes[i - 1] for i in picks]
     if not staged_only:
-        risky = [c for c in selected if ("Staged" in c.sections and "Unstaged" in c.sections)]
+        risky = [
+            c for c in selected if ("Staged" in c.sections and "Unstaged" in c.sections)
+        ]
         if risky:
             msg = "\n".join([f"- {c.path}" for c in risky])
             console.print(
@@ -223,7 +257,9 @@ def run(cwd: Path | None = None, auto: bool = False, ai: bool = False, staged_on
     if mode not in ("one", "split"):
         mode = "one"
 
-    def suggest_for(change_items: list[tuple[str, str]], title: str) -> tuple[list[str], str, str, str]:
+    def suggest_for(
+        change_items: list[tuple[str, str]], title: str
+    ) -> tuple[list[str], str, str, str]:
         # Returns (paths, type, message, raw_text)
         if ai:
             payload = _render_combined(has_commits, change_items, title=title)
@@ -235,7 +271,12 @@ def run(cwd: Path | None = None, auto: bool = False, ai: bool = False, staged_on
             except Exception as e:
                 # Fall back to heuristics on quota / API errors
                 h = suggest_from_changes(changes=change_items, has_commits=has_commits)
-                return h.add_args, h.commit_type, h.commit_message, f"AI unavailable: {e}"
+                return (
+                    h.add_args,
+                    h.commit_type,
+                    h.commit_message,
+                    f"AI unavailable: {e}",
+                )
         h = suggest_from_changes(changes=change_items, has_commits=has_commits)
         return h.add_args, h.commit_type, h.commit_message, ""
 
@@ -256,12 +297,18 @@ def run(cwd: Path | None = None, auto: bool = False, ai: bool = False, staged_on
         add_line = "git add -A -- " + " ".join(_ps_quote(p) for p in paths)
         commit_line = f'git commit -m "[{ctype}] {cmsg}"'
         rendered.append(f"### {name}\n{add_line}\n{commit_line}")
-    console.print(Panel("\n\n".join(rendered), title="Suggested commands", border_style="green"))
+    console.print(
+        Panel("\n\n".join(rendered), title="Suggested commands", border_style="green")
+    )
 
     if auto:
         do_apply = True
     else:
-        prompt = "Apply these commit(s)? (y/n/auto)" if len(plan) > 1 else "Apply these commands? (y/n/auto)"
+        prompt = (
+            "Apply these commit(s)? (y/n/auto)"
+            if len(plan) > 1
+            else "Apply these commands? (y/n/auto)"
+        )
         choice = typer.prompt(prompt, default="n").strip().lower()
         do_apply = choice == "auto" or choice in ("y", "yes")
 

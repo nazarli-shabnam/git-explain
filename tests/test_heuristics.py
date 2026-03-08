@@ -7,7 +7,9 @@ def test_docs_only_is_docs() -> None:
         has_commits=True,
     )
     assert s.commit_type == "DOCS"
-    assert s.commit_message.lower().startswith("add") or s.commit_message.lower().startswith("update")
+    assert s.commit_message.lower().startswith(
+        "add"
+    ) or s.commit_message.lower().startswith("update")
 
 
 def test_added_files_prefer_feat() -> None:
@@ -21,7 +23,11 @@ def test_added_files_prefer_feat() -> None:
 
 def test_mostly_tests_or_config_is_test() -> None:
     s = suggest_from_changes(
-        changes=[("M", "tests/test_cli.py"), ("M", "pyproject.toml"), ("M", "requirements.txt")],
+        changes=[
+            ("M", "tests/test_cli.py"),
+            ("M", "pyproject.toml"),
+            ("M", "requirements.txt"),
+        ],
         has_commits=True,
     )
     assert s.commit_type == "TEST"
