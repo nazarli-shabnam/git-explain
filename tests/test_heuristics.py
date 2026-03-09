@@ -31,3 +31,11 @@ def test_mostly_tests_or_config_is_test() -> None:
         has_commits=True,
     )
     assert s.commit_type == "TEST"
+
+
+def test_config_only_is_chore_not_test() -> None:
+    s = suggest_from_changes(
+        changes=[("M", ".gitignore"), ("M", "pyproject.toml")],
+        has_commits=True,
+    )
+    assert s.commit_type == "CHORE"

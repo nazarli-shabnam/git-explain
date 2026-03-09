@@ -65,6 +65,8 @@ def suggest_from_changes(
     docs = [p for p in paths if _is_doc(p)]
     tests = [p for p in paths if _is_test(p)]
     configs = [p for p in paths if _is_config(p)]
+    has_tests = bool(tests)
+    has_configs = bool(configs)
     non_docs = [p for p in paths if p not in docs]
 
     docs_only = bool(paths) and len(docs) == len(paths)
@@ -78,7 +80,12 @@ def suggest_from_changes(
     if docs_only:
         commit_type = "DOCS"
     elif mostly_tests_or_config:
-        commit_type = "TEST"
+        if has_tests and not has_configs:
+            commit_type = "TEST"
+        elif has_configs and not has_tests:
+            commit_type = "CHORE"
+        else:
+            commit_type = "TEST"
     elif added_any:
         commit_type = "FEAT"
     else:
