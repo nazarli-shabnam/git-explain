@@ -307,6 +307,22 @@ def run(
         paths, ctype, cmsg, _raw = suggest_for(selected_pairs, title="Selected")
         plan.append(("one", paths, ctype, cmsg))
 
+    def _render_plan(pl: list[tuple[str, list[str], str, str]]) -> str:
+        rendered: list[str] = []
+        for name, paths, ctype, cmsg in pl:
+            add_line = "git add -A -- " + " ".join(_ps_quote(p) for p in paths)
+            commit_line = f'git commit -m "[{ctype}] {cmsg}"'
+            rendered.append(f"### {name}\n{add_line}\n{commit_line}")
+        return "\n\n".join(rendered)
+
+    console.print(
+        Panel(
+            _render_plan(plan),
+            title="Suggested commands",
+            border_style="green",
+        )
+    )
+
     if not auto:
         edit_choice = (
             typer.prompt(
@@ -323,24 +339,20 @@ def run(
                 )
                 new_msg = (
                     typer.prompt(
-                        "New commit message (leave blank to keep)", default=cmsg
+                        "New commit message (subject only, no [TYPE] prefix)",
+                        default=cmsg,
                     )
                     .strip()
                 )
-                if new_msg:
-                    updated.append((name, paths, ctype, new_msg))
-                else:
-                    updated.append((name, paths, ctype, cmsg))
+                updated.append((name, paths, ctype, new_msg or cmsg))
             plan = updated
-
-    rendered = []
-    for name, paths, ctype, cmsg in plan:
-        add_line = "git add -A -- " + " ".join(_ps_quote(p) for p in paths)
-        commit_line = f'git commit -m "[{ctype}] {cmsg}"'
-        rendered.append(f"### {name}\n{add_line}\n{commit_line}")
-    console.print(
-        Panel("\n\n".join(rendered), title="Suggested commands", border_style="green")
-    )
+            console.print(
+                Panel(
+                    _render_plan(plan),
+                    title="Updated commands",
+                    border_style="green",
+                )
+            )
 
     if auto:
         do_apply = True
