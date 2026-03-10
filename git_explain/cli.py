@@ -186,10 +186,24 @@ def main(
     cwd: str | None = typer.Option(
         None, "--cwd", help="Working directory (default: current)"
     ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help=(
+            "Override Gemini model name for --ai "
+            "(defaults to GEMINI_MODEL env var or internal default)."
+        ),
+    ),
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
-    run(cwd=Path(cwd) if cwd else None, auto=auto, ai=ai, staged_only=staged_only)
+    run(
+        cwd=Path(cwd) if cwd else None,
+        auto=auto,
+        ai=ai,
+        staged_only=staged_only,
+        model=model,
+    )
 
 
 def run(
@@ -197,6 +211,7 @@ def run(
     auto: bool = False,
     ai: bool = False,
     staged_only: bool = False,
+    model: str | None = None,
 ) -> None:
     console.print(Text("git-explain", style="bold"))
     try:
@@ -264,7 +279,7 @@ def run(
         if ai:
             payload = _render_combined(has_commits, change_items, title=title)
             try:
-                sug, raw = suggest_commands(payload)
+                sug, raw = suggest_commands(payload, model=model)
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
                 return sug.add_args, sug.commit_type, sug.commit_message, raw
@@ -291,6 +306,32 @@ def run(
     else:
         paths, ctype, cmsg, _raw = suggest_for(selected_pairs, title="Selected")
         plan.append(("one", paths, ctype, cmsg))
+
+    if not auto:
+        edit_choice = (
+            typer.prompt(
+                "Edit commit message(s) before applying? (y/n)", default="n"
+            )
+            .strip()
+            .lower()
+        )
+        if edit_choice in ("y", "yes"):
+            updated: list[tuple[str, list[str], str, str]] = []
+            for name, paths, ctype, cmsg in plan:
+                console.print(
+                    f"[dim]{name}:[/dim] current message: [bold][{ctype}] {cmsg}[/bold]"
+                )
+                new_msg = (
+                    typer.prompt(
+                        "New commit message (leave blank to keep)", default=cmsg
+                    )
+                    .strip()
+                )
+                if new_msg:
+                    updated.append((name, paths, ctype, new_msg))
+                else:
+                    updated.append((name, paths, ctype, cmsg))
+            plan = updated
 
     rendered = []
     for name, paths, ctype, cmsg in plan:
