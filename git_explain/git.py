@@ -128,3 +128,45 @@ def get_combined_diff(cwd: str | Path | None = None) -> tuple[str, Path]:
         parts.append("## Untracked\n" + "\n".join([f"{s} {p}" for s, p in untracked]))
     combined = "\n\n".join(parts) if parts else ""
     return combined, root
+
+
+def get_diff_for_paths(
+    paths: list[str], cwd: str | Path | None = None
+) -> str:
+    """Return combined diff (staged + unstaged) for the given paths.
+    Untracked files are shown as full file content.
+    """
+    if not paths:
+        return ""
+    root = get_repo_root(cwd)
+    parts: list[str] = []
+
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--"] + paths,
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        parts.append("## Staged diff\n" + result.stdout.strip())
+
+    result = subprocess.run(
+        ["git", "diff", "--"] + paths,
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        parts.append("## Unstaged diff\n" + result.stdout.strip())
+
+    untracked = get_untracked_changes(cwd=root)
+    untracked_set = {p for _, p in untracked}
+    for p in paths:
+        if p in untracked_set:
+            try:
+                content = (root / p).read_text(encoding="utf-8", errors="replace")
+                parts.append(f"## Untracked (new file): {p}\n{content}")
+            except Exception:
+                parts.append(f"## Untracked (new file): {p}\n<binary or unreadable>")
+
+    return "\n\n".join(parts)

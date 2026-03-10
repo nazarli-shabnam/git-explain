@@ -13,7 +13,7 @@ from rich.text import Text
 
 from git_explain.gemini import suggest_commands
 from git_explain.heuristics import suggest_from_changes
-from git_explain.git import get_combined_diff
+from git_explain.git import get_combined_diff, get_diff_for_paths
 from git_explain.run import apply_commands
 
 load_dotenv()
@@ -194,6 +194,11 @@ def main(
             "(defaults to GEMINI_MODEL env var or internal default)."
         ),
     ),
+    with_diff: bool = typer.Option(
+        False,
+        "--with-diff",
+        help="With --ai: send full diff to the model for detailed, specific commit messages (opt-in).",
+    ),
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
@@ -203,6 +208,7 @@ def main(
         ai=ai,
         staged_only=staged_only,
         model=model,
+        with_diff=with_diff,
     )
 
 
@@ -212,6 +218,7 @@ def run(
     ai: bool = False,
     staged_only: bool = False,
     model: str | None = None,
+    with_diff: bool = False,
 ) -> None:
     console.print(Text("git-explain", style="bold"))
     try:
@@ -278,8 +285,15 @@ def run(
         # Returns (paths, type, message, raw_text)
         if ai:
             payload = _render_combined(has_commits, change_items, title=title)
+            if with_diff:
+                paths_for_diff = [p for _, p in change_items]
+                diff_text = get_diff_for_paths(paths_for_diff, cwd=repo_root)
+                if diff_text:
+                    payload = payload + "\n\n## Diff\n" + diff_text
             try:
-                sug, raw = suggest_commands(payload, model=model)
+                sug, raw = suggest_commands(
+                    payload, model=model, with_diff=with_diff
+                )
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
                 return sug.add_args, sug.commit_type, sug.commit_message, raw
