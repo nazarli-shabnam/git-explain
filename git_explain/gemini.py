@@ -298,7 +298,7 @@ def suggest_commands(
 
     header_only = diff
     if with_diff:
-        header_only = diff.split(\"\\n## Diff\", 1)[0]
+        header_only = diff.split("\n## Diff", 1)[0]
 
     entries, has_commits = _parse_changed_file_list(header_only.strip())
     all_paths = [p for _, p in entries]
