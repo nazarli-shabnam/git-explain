@@ -89,9 +89,7 @@ def _render_combined(
     return "\n\n".join(parts).strip()
 
 
-def _parse_selection(
-    selection: str, n: int
-) -> tuple[list[int], list[str]]:
+def _parse_selection(selection: str, n: int) -> tuple[list[int], list[str]]:
     """Parse a selection string into numeric indices and explicit path tokens.
 
     Supports:
@@ -257,10 +255,17 @@ def run(
     norm_paths = [c.path.replace("\\", "/") for c in changes]
     untracked_indices_by_root: dict[str, list[int]] = {}
     for idx, (ch, np) in enumerate(zip(changes, norm_paths)):
-        if "Untracked" in ch.sections and "Staged" not in ch.sections and "Unstaged" not in ch.sections and "/" in np:
+        if (
+            "Untracked" in ch.sections
+            and "Staged" not in ch.sections
+            and "Unstaged" not in ch.sections
+            and "/" in np
+        ):
             root = np.split("/", 1)[0]
             untracked_indices_by_root.setdefault(root, []).append(idx)
-    folder_groups = {root: idxs for root, idxs in untracked_indices_by_root.items() if len(idxs) > 1}
+    folder_groups = {
+        root: idxs for root, idxs in untracked_indices_by_root.items() if len(idxs) > 1
+    }
 
     display_items: list[tuple[str, list[int]]] = []
     seen_untracked_roots: set[str] = set()
@@ -341,9 +346,7 @@ def run(
                 if diff_text:
                     payload = payload + "\n\n## Diff\n" + diff_text
             try:
-                sug, raw = suggest_commands(
-                    payload, model=model, with_diff=with_diff
-                )
+                sug, raw = suggest_commands(payload, model=model, with_diff=with_diff)
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
                 return sug.add_args, sug.commit_type, sug.commit_message, raw
@@ -365,9 +368,7 @@ def run(
     mode = "one"
     if len(unique_paths) > 1:
         mode_input = (
-            typer.prompt("Commit mode: one or split", default="one")
-            .strip()
-            .lower()
+            typer.prompt("Commit mode: one or split", default="one").strip().lower()
         )
         if mode_input in ("one", "split"):
             mode = mode_input
@@ -416,7 +417,6 @@ def run(
                 )
                 new_msg = cmsg
                 if use_editor:
-
                     edited = typer.edit(cmsg + "\n")
                     if edited is not None:
                         for line in edited.splitlines():
@@ -429,8 +429,7 @@ def run(
                         typer.prompt(
                             "New commit message (subject only, no [TYPE] prefix)",
                             default=cmsg,
-                        )
-                        .strip()
+                        ).strip()
                     ) or cmsg
                 updated.append((name, paths, ctype, new_msg))
             plan = updated
