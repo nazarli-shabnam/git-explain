@@ -29,9 +29,30 @@ git add README.md FEATURES.md git_explain/gemini.py
 git commit -m "[DOCS] Add README and FEATURES doc, tune Gemini prompt"
 """
 
+SYSTEM_PROMPT_WITH_DIFF = """You are given:
+1. A list of changed/added files (## Staged, ## Unstaged, ## Untracked) with <STATUS> <PATH>.
+2. The full diff (## Staged diff, ## Unstaged diff, ## Untracked) showing exact code changes.
+
+Use the diff to write a specific, detailed commit message. Do not use generic words like "update" or "changes"—describe what actually changed (e.g. "add opt-in --with-diff to send full diff to LLM for detailed messages", "tweak commit message edit flow to show suggestion before prompting to edit").
+
+Output format (conventional commits style):
+- Line 1: git add <path1> <path2> ... with EVERY path from the file list. Do not omit any.
+- Line 2: git commit -m "type: subject" where type is exactly one of: feat, fix, docs, refactor, test.
+  The subject must be a short, specific summary in imperative mood, no period at end (e.g. "feat: allow editing commit message before apply", "fix: parse conventional commit line from AI").
+
+Example:
+git add git_explain/cli.py git_explain/gemini.py
+git commit -m "feat: add opt-in --with-diff for detailed AI commit messages"
+"""
+
 ADD_LINE_RE = re.compile(r"git\s+add\s+(.+)", re.IGNORECASE)
 COMMIT_LINE_RE = re.compile(
     r'git\s+commit\s+-m\s+["\']\[(FEAT|FIX|DOCS|REFACTOR|TEST|TESTS)\]\s*(.+?)["\']',
+    re.IGNORECASE,
+)
+# Conventional: "feat: subject" or "fix: subject"
+COMMIT_LINE_CONVENTIONAL_RE = re.compile(
+    r'git\s+commit\s+-m\s+["\'](feat|fix|docs|refactor|test)\s*:\s*(.+?)["\']',
     re.IGNORECASE,
 )
 DEFAULT_MODEL = "gemini-2.5-flash"
@@ -200,12 +221,13 @@ def _get_client() -> genai.Client:
 
 
 def suggest_commands(
-    diff: str, model: str | None = None
+    diff: str, model: str | None = None, with_diff: bool = False
 ) -> tuple[Suggestion | None, str]:
-    """Call Gemini with the file list; return (suggestion, raw_response). suggestion is None if unparseable."""
+    """Call Gemini with the file list (and optionally full diff); return (suggestion, raw_response). suggestion is None if unparseable."""
     if not diff or not diff.strip():
         return None, ""
     model = model or os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL
+    system_instruction = SYSTEM_PROMPT_WITH_DIFF if with_diff else SYSTEM_PROMPT
     client = _get_client()
     last_err = None
     for attempt in range(2):
@@ -214,9 +236,9 @@ def suggest_commands(
                 model=model,
                 contents=diff.strip(),
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
+                    system_instruction=system_instruction,
                     temperature=0.2,
-                    max_output_tokens=256,
+                    max_output_tokens=512 if with_diff else 256,
                 ),
             )
             break
@@ -261,6 +283,11 @@ def suggest_commands(
         if add_m:
             add_args = [f.strip() for f in add_m.group(1).split() if f.strip()]
             continue
+        commit_m = COMMIT_LINE_CONVENTIONAL_RE.match(line) if with_diff else None
+        if commit_m:
+            commit_type = commit_m.group(1).upper()
+            commit_message = commit_m.group(2).strip().rstrip(".")
+            break
         commit_m = COMMIT_LINE_RE.match(line)
         if commit_m:
             commit_type = commit_m.group(1).upper()
