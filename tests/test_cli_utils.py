@@ -2,13 +2,23 @@ from git_explain.cli import _group_changes, _parse_selection
 
 
 def test_parse_selection_all() -> None:
-    assert _parse_selection("all", 5) == [1, 2, 3, 4, 5]
-    assert _parse_selection("", 3) == [1, 2, 3]
+    idx, paths = _parse_selection("all", 5)
+    assert idx == [1, 2, 3, 4, 5]
+    assert paths == []
+
+    idx, paths = _parse_selection("", 3)
+    assert idx == [1, 2, 3]
+    assert paths == []
 
 
 def test_parse_selection_ranges() -> None:
-    assert _parse_selection("1,3-4", 5) == [1, 3, 4]
-    assert _parse_selection("2-1", 3) == [1, 2]
+    idx, paths = _parse_selection("1,3-4", 5)
+    assert idx == [1, 3, 4]
+    assert paths == []
+
+    idx, paths = _parse_selection("2-1", 3)
+    assert idx == [1, 2]
+    assert paths == []
 
 
 def test_group_changes_buckets() -> None:
