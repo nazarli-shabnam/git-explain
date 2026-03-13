@@ -1,10 +1,12 @@
 # git-explain
 
-CLI that suggests `git add` and `git commit` from your diffs. Uses local heuristics by default; optional **Gemini** integration (`--ai`) for AI-generated messages.
+CLI that suggests `git add` and `git commit` from your diffs. Uses local heuristics by default; optional **Gemini** integration for AI-generated messages.
+
+---
 
 ## Install
 
-**From GitHub (any Python 3.10+ env):**
+**From GitHub** (any Python 3.10+ env):
 
 ```bash
 pip install "git+https://github.com/nazarli-shabnam/git-explain.git@main"
@@ -16,7 +18,7 @@ Or from a specific release:
 pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v0.1.0"
 ```
 
-**From source** (repo root, where `pyproject.toml` and `git_explain/` are):
+**From source** (repo root, where `pyproject.toml` lives):
 
 ```powershell
 python -m venv venv
@@ -24,9 +26,11 @@ python -m venv venv
 pip install -e .
 ```
 
+---
+
 ## API key (for `--ai` only)
 
-Put your Gemini API key in a `.env` file where you run the CLI (or set it in your environment):
+Put your Gemini API key in a `.env` file where you run the CLI, or set it in your environment:
 
 ```
 GEMINI_API_KEY=your_key_here
@@ -34,7 +38,9 @@ GEMINI_API_KEY=your_key_here
 
 Or use `GOOGLE_API_KEY`. Optional: set `GEMINI_MODEL` to override the default (e.g. `GEMINI_MODEL=gemini-2.5-flash`). See [Troubleshooting](#troubleshooting) for 404/429.
 
-## Use
+---
+
+## Usage
 
 Run from **inside a git repository** that has changes:
 
@@ -42,25 +48,48 @@ Run from **inside a git repository** that has changes:
 git-explain
 ```
 
-- **Default:** no API call; local heuristics suggest commit type and message.
-- **With `--ai`:** sends only file paths and statuses to Gemini for the message (no file contents).
-- You're prompted **Apply these commands? (y/n/auto)** — **n** = preview only, **y** = apply, **auto** = apply and remember.
+You’ll see a list of changed files, choose which to include, then get suggested `git add` and `git commit` commands. Answer **y** to apply, **n** to preview only, or **auto** to apply and remember for next time.
 
-**Options:**
+---
+
+## Modes: `git-explain` vs `git-explain --ai` vs `git-explain --with-diff --ai`
+
+| Command | What it does |
+|---------|--------------|
+| `git-explain` | **Heuristics only.** No API call. Suggests commit type and message from file names and status (e.g. docs, tests, config, code). Fast and private. |
+| `git-explain --ai` | **AI (paths only).** Sends only file paths and statuses (A/M/D) to Gemini. No file contents. Good for smarter messages without sharing code. |
+| `git-explain --with-diff --ai` | **AI (full diff).** Sends file list **plus** the full diff (staged, unstaged, untracked content) to Gemini. Produces detailed, specific messages (e.g. `feat: add opt-in --with-diff for detailed AI commit messages`). Opt-in; use when you want maximum accuracy and are okay sending diff content to the API. |
+
+**Summary:** Use plain `git-explain` for speed and privacy. Use `--ai` for better suggestions without sharing code. Use `--with-diff --ai` when you want the most accurate, context-aware messages and accept sending diff content to Gemini.
+
+---
+
+## Options
 
 | Option | Description |
 |--------|-------------|
 | `--help` | Show all options. |
-| `--auto` | Apply without prompting. |
+| `--auto` | Apply suggestion without prompting. |
 | `--ai` | Use Gemini for commit type/message (file paths only). |
-| `--staged-only` | Commit only what's already staged (no `git add`). |
+| `--with-diff` | With `--ai`: send full diff to the model for detailed messages. |
+| `--model NAME` | Override Gemini model (e.g. `--model gemini-2.0-flash`). |
+| `--staged-only` | Commit only what’s already staged (no `git add`). |
 | `--cwd PATH` | Run as if current directory is `PATH`. |
 | `--install-completion [SHELL]` | Install shell completion (`bash`, `zsh`). |
 | `--show-completion [SHELL]` | Print completion script for `SHELL`. |
 
-**Quick try:** Make a small change, run `git-explain`, answer **n** to only preview. If you see "No staged, unstaged, or untracked changes", ensure you have modified or added files that are not ignored by `.gitignore`.
+---
 
-**Interactive:** It shows a numbered list of changed files; you choose which to include (e.g. `1,2,5-7` or `all`), then **one** commit or **split** by docs/tests/config/code.
+## Workflow
+
+1. **Changed files** — Shows staged, unstaged, and untracked files. Untracked folders are grouped (e.g. `foo/ (untracked folder; 5 files)`).
+2. **Select files** — Enter numbers (e.g. `1,2,5-7`), `all`, or a path (e.g. `main.py`, `src/utils/`).
+3. **Commit mode** — If you selected 2+ files: choose `one` (single commit) or `split` (separate commits by docs/tests/config/code).
+4. **Suggested commands** — Panel with `git add` and `git commit` lines.
+5. **Edit (optional)** — You can tweak the commit message inline before applying.
+6. **Apply** — Answer `y` to run the commands, `n` to preview only, or `auto` to apply and remember.
+
+**Quick try:** Make a small change, run `git-explain`, answer **n** to only preview. If you see "No staged, unstaged, or untracked changes", ensure you have modified or added files that are not ignored by `.gitignore`.
 
 ---
 
