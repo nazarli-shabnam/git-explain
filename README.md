@@ -38,13 +38,27 @@ pip install -e .
 
 ## API key (for `--ai` only)
 
-Put your Gemini API key in a `.env` file where you run the CLI, or set it in your environment:
+**Option 1 — Environment variable** (recommended for production, CI, scripts):
+
+```powershell
+# PowerShell
+$env:GEMINI_API_KEY = "your_key_here"
+```
+
+```bash
+# Bash / Zsh
+export GEMINI_API_KEY=your_key_here
+```
+
+**Option 2 — `.env` file** (convenient for local development):
+
+Create a `.env` file where you run the CLI:
 
 ```
 GEMINI_API_KEY=your_key_here
 ```
 
-Or use `GOOGLE_API_KEY`. Optional: set `GEMINI_MODEL` to override the default (e.g. `GEMINI_MODEL=gemini-2.5-flash`). See [Troubleshooting](#troubleshooting) for 404/429.
+You can also use `GOOGLE_API_KEY`. Optional: set `GEMINI_MODEL` to override the default (e.g. `GEMINI_MODEL=gemini-2.5-flash`). See [Troubleshooting](#troubleshooting) for 404/429.
 
 ---
 
