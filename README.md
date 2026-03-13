@@ -12,10 +12,10 @@ CLI that suggests `git add` and `git commit` from your diffs. Uses local heurist
 pip install "git+https://github.com/nazarli-shabnam/git-explain.git@main"
 ```
 
-Or from a specific release:
+Or from the latest release (v1.1.0):
 
 ```bash
-pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v0.1.0"
+pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v1.1.0"
 ```
 
 **From source** (repo root, where `pyproject.toml` lives):
