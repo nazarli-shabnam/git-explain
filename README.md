@@ -2,23 +2,31 @@
 
 CLI that suggests `git add` and `git commit` from your diffs. Uses local heuristics by default; optional **Gemini** integration for AI-generated messages.
 
+[![PyPI version](https://badge.fury.io/py/git-explain.svg)](https://pypi.org/project/git-explain/)
+
 ---
 
 ## Install
 
-**From GitHub** (any Python 3.10+ env):
+**From PyPI** (recommended, Python 3.10+):
+
+```bash
+pip install git-explain
+```
+
+**From GitHub** (bleeding edge or specific version):
 
 ```bash
 pip install "git+https://github.com/nazarli-shabnam/git-explain.git@main"
 ```
 
-Or from the latest release (v1.1.0):
+Or from a release tag:
 
 ```bash
 pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v1.1.0"
 ```
 
-**From source** (repo root, where `pyproject.toml` lives):
+**From source** (repo root):
 
 ```powershell
 python -m venv venv
