@@ -47,12 +47,12 @@ git commit -m "feat: add opt-in --with-diff for detailed AI commit messages"
 
 ADD_LINE_RE = re.compile(r"git\s+add\s+(.+)", re.IGNORECASE)
 COMMIT_LINE_RE = re.compile(
-    r'git\s+commit\s+-m\s+["\']\[(FEAT|FIX|DOCS|REFACTOR|TEST|TESTS)\]\s*(.+?)["\']',
+    r'git\s+commit\s+-m\s+["\']\[(FEAT|FIX|DOCS|REFACTOR|TESTS)\]\s*(.+?)["\']',
     re.IGNORECASE,
 )
-# Conventional: "feat: subject" or "fix: subject"
+# Conventional: "feat: subject" or "fix: subject" (use "tests" not "test")
 COMMIT_LINE_CONVENTIONAL_RE = re.compile(
-    r'git\s+commit\s+-m\s+["\'](feat|fix|docs|refactor|test)\s*:\s*(.+?)["\']',
+    r'git\s+commit\s+-m\s+["\'](feat|fix|docs|refactor|tests)\s*:\s*(.+?)["\']',
     re.IGNORECASE,
 )
 DEFAULT_MODEL = "gemini-2.5-flash"

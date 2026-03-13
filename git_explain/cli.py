@@ -231,6 +231,17 @@ def run(
     with_diff: bool = False,
 ) -> None:
     console.print(Text("git-explain", style="bold"))
+    if with_diff and not ai:
+        console.print(
+            "[yellow]Warning:[/yellow] --with-diff has no effect without --ai. "
+            "It only affects AI-generated commit messages."
+        )
+        enable = typer.prompt("Enable AI? (y/n)", default="n").strip().lower()
+        if enable in ("y", "yes"):
+            ai = True
+        else:
+            with_diff = False
+
     try:
         combined, repo_root = get_combined_diff(cwd=cwd)
     except RuntimeError as e:
@@ -289,7 +300,7 @@ def run(
         lines.append(f"{idx:>2}. {label}")
     console.print(Panel("\n".join(lines), title="Select files", border_style="blue"))
     selection = typer.prompt(
-        "Select files to include (e.g. 1,2,5-7, 'all', or a path like git_explain/cli.py)",
+        "Select files to include (e.g. 1,2,5-7, 'all', or a path like folder/file.txt)",
         default="all",
     )
     picks, path_tokens = _parse_selection(selection, len(display_items))
@@ -402,29 +413,26 @@ def run(
     if not auto:
         edit_choice = (
             typer.prompt(
-                "Edit commit message(s) before applying? (n = no, i = inline, e = editor)",
+                "Edit commit message(s) before applying? (y/n)",
                 default="n",
             )
             .strip()
             .lower()
         )
-        if edit_choice in ("i", "inline", "e", "editor", "y", "yes"):
-            use_editor = edit_choice in ("e", "editor")
+        if edit_choice in ("y", "yes"):
             updated: list[tuple[str, list[str], str, str]] = []
             for name, paths, ctype, cmsg in plan:
                 console.print(
                     f"[dim]{name}:[/dim] current message: [bold][{ctype}] {cmsg}[/bold]"
                 )
-                new_msg = cmsg
-                if use_editor:
-                    edited = typer.edit(cmsg + "\n")
-                    if edited is not None:
-                        for line in edited.splitlines():
-                            line = line.strip()
-                            if line:
-                                new_msg = line
-                                break
-                else:
+                try:
+                    from prompt_toolkit import prompt as pt_prompt
+
+                    new_msg = pt_prompt(
+                        "New commit message (subject only, no [TYPE] prefix): ",
+                        default=cmsg,
+                    ).strip() or cmsg
+                except Exception:
                     new_msg = (
                         typer.prompt(
                             "New commit message (subject only, no [TYPE] prefix)",
