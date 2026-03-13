@@ -89,11 +89,19 @@ def _render_combined(
     return "\n\n".join(parts).strip()
 
 
-def _parse_selection(selection: str, n: int) -> list[int]:
-    s = (selection or "").strip().lower()
-    if s in ("", "a", "all"):
-        return list(range(1, n + 1))
-    out: set[int] = set()
+def _parse_selection(selection: str, n: int) -> tuple[list[int], list[str]]:
+    """Parse a selection string into numeric indices and explicit path tokens.
+
+    Supports:
+    - \"\" / a / all        -> all indices 1..n
+    - 1,2,5-7              -> numeric indices/ranges
+    - anything not numeric -> treated as a path token (e.g. git_explain/cli.py)
+    """
+    s = (selection or "").strip()
+    if s.lower() in ("", "a", "all"):
+        return list(range(1, n + 1)), []
+    out_indices: set[int] = set()
+    path_tokens: list[str] = []
     for part in s.split(","):
         part = part.strip()
         if not part:
@@ -104,18 +112,20 @@ def _parse_selection(selection: str, n: int) -> list[int]:
                 start = int(a.strip())
                 end = int(b.strip())
             except ValueError:
+                path_tokens.append(part)
                 continue
             for i in range(min(start, end), max(start, end) + 1):
                 if 1 <= i <= n:
-                    out.add(i)
-        else:
-            try:
-                i = int(part)
-            except ValueError:
-                continue
-            if 1 <= i <= n:
-                out.add(i)
-    return sorted(out)
+                    out_indices.add(i)
+            continue
+        try:
+            i = int(part)
+        except ValueError:
+            path_tokens.append(part)
+            continue
+        if 1 <= i <= n:
+            out_indices.add(i)
+    return sorted(out_indices), path_tokens
 
 
 def _group_changes(changes: list[tuple[str, str]]) -> dict[str, list[tuple[str, str]]]:
@@ -242,19 +252,68 @@ def run(
         console.print("[yellow]No selectable changes found.[/yellow]")
         return
 
+    norm_paths = [c.path.replace("\\", "/") for c in changes]
+    untracked_indices_by_root: dict[str, list[int]] = {}
+    for idx, (ch, np) in enumerate(zip(changes, norm_paths)):
+        if (
+            "Untracked" in ch.sections
+            and "Staged" not in ch.sections
+            and "Unstaged" not in ch.sections
+            and "/" in np
+        ):
+            root = np.split("/", 1)[0]
+            untracked_indices_by_root.setdefault(root, []).append(idx)
+    folder_groups = {
+        root: idxs for root, idxs in untracked_indices_by_root.items() if len(idxs) > 1
+    }
+
+    display_items: list[tuple[str, list[int]]] = []
+    seen_untracked_roots: set[str] = set()
+    for idx, ch in enumerate(changes):
+        np = norm_paths[idx]
+        root = np.split("/", 1)[0] if "/" in np else None
+        if root and root in folder_groups:
+            if root in seen_untracked_roots:
+                continue
+            seen_untracked_roots.add(root)
+            count = len(folder_groups[root])
+            label = f"{root}/ (untracked folder; {count} files)"
+            display_items.append((label, folder_groups[root]))
+        else:
+            sec = ",".join([s.lower() for s in ch.sections if s and s != "Meta"])
+            label = f"[{ch.status}] ({sec}) {ch.path}"
+            display_items.append((label, [idx]))
+
     lines = []
-    for idx, ch in enumerate(changes, start=1):
-        sec = ",".join([s.lower() for s in ch.sections if s and s != "Meta"])
-        lines.append(f"{idx:>2}. [{ch.status}] ({sec}) {ch.path}")
+    for idx, (label, _idxs) in enumerate(display_items, start=1):
+        lines.append(f"{idx:>2}. {label}")
     console.print(Panel("\n".join(lines), title="Select files", border_style="blue"))
     selection = typer.prompt(
-        "Select files to include (e.g. 1,2,5-7 or 'all')", default="all"
+        "Select files to include (e.g. 1,2,5-7, 'all', or a path like git_explain/cli.py)",
+        default="all",
     )
-    picks = _parse_selection(selection, len(changes))
-    if not picks:
+    picks, path_tokens = _parse_selection(selection, len(display_items))
+    if not picks and not path_tokens:
         console.print("[yellow]No files selected.[/yellow]")
         return
-    selected = [changes[i - 1] for i in picks]
+
+    selected_indices: set[int] = set()
+    for display_idx in picks:
+        if 1 <= display_idx <= len(display_items):
+            _, idxs = display_items[display_idx - 1]
+            selected_indices.update(idxs)
+
+    for token in path_tokens:
+        t_norm = token.replace("\\", "/").strip()
+        for idx, np in enumerate(norm_paths):
+            if np == t_norm or np.startswith(t_norm.rstrip("/") + "/"):
+                selected_indices.add(idx)
+
+    if not selected_indices:
+        console.print("[yellow]No files matched your selection.[/yellow]")
+        return
+
+    selected = [changes[i] for i in sorted(selected_indices)]
     if not staged_only:
         risky = [
             c for c in selected if ("Staged" in c.sections and "Unstaged" in c.sections)
@@ -275,10 +334,6 @@ def run(
             if cont not in ("y", "yes"):
                 return
 
-    mode = typer.prompt("Commit mode: one or split", default="one").strip().lower()
-    if mode not in ("one", "split"):
-        mode = "one"
-
     def suggest_for(
         change_items: list[tuple[str, str]], title: str
     ) -> tuple[list[str], str, str, str]:
@@ -291,9 +346,7 @@ def run(
                 if diff_text:
                     payload = payload + "\n\n## Diff\n" + diff_text
             try:
-                sug, raw = suggest_commands(
-                    payload, model=model, with_diff=with_diff
-                )
+                sug, raw = suggest_commands(payload, model=model, with_diff=with_diff)
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
                 return sug.add_args, sug.commit_type, sug.commit_message, raw
@@ -310,6 +363,15 @@ def run(
         return h.add_args, h.commit_type, h.commit_message, ""
 
     selected_pairs = [(ch.status, ch.path) for ch in selected]
+    unique_paths = {p for _, p in selected_pairs}
+
+    mode = "one"
+    if len(unique_paths) > 1:
+        mode_input = (
+            typer.prompt("Commit mode: one or split", default="one").strip().lower()
+        )
+        if mode_input in ("one", "split"):
+            mode = mode_input
 
     plan: list[tuple[str, list[str], str, str]] = []
     if mode == "split":
@@ -340,25 +402,36 @@ def run(
     if not auto:
         edit_choice = (
             typer.prompt(
-                "Edit commit message(s) before applying? (y/n)", default="n"
+                "Edit commit message(s) before applying? (n = no, i = inline, e = editor)",
+                default="n",
             )
             .strip()
             .lower()
         )
-        if edit_choice in ("y", "yes"):
+        if edit_choice in ("i", "inline", "e", "editor", "y", "yes"):
+            use_editor = edit_choice in ("e", "editor")
             updated: list[tuple[str, list[str], str, str]] = []
             for name, paths, ctype, cmsg in plan:
                 console.print(
                     f"[dim]{name}:[/dim] current message: [bold][{ctype}] {cmsg}[/bold]"
                 )
-                new_msg = (
-                    typer.prompt(
-                        "New commit message (subject only, no [TYPE] prefix)",
-                        default=cmsg,
-                    )
-                    .strip()
-                )
-                updated.append((name, paths, ctype, new_msg or cmsg))
+                new_msg = cmsg
+                if use_editor:
+                    edited = typer.edit(cmsg + "\n")
+                    if edited is not None:
+                        for line in edited.splitlines():
+                            line = line.strip()
+                            if line:
+                                new_msg = line
+                                break
+                else:
+                    new_msg = (
+                        typer.prompt(
+                            "New commit message (subject only, no [TYPE] prefix)",
+                            default=cmsg,
+                        ).strip()
+                    ) or cmsg
+                updated.append((name, paths, ctype, new_msg))
             plan = updated
             console.print(
                 Panel(

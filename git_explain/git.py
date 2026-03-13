@@ -130,9 +130,7 @@ def get_combined_diff(cwd: str | Path | None = None) -> tuple[str, Path]:
     return combined, root
 
 
-def get_diff_for_paths(
-    paths: list[str], cwd: str | Path | None = None
-) -> str:
+def get_diff_for_paths(paths: list[str], cwd: str | Path | None = None) -> str:
     """Return combined diff (staged + unstaged) for the given paths.
     Untracked files are shown as full file content.
     """
