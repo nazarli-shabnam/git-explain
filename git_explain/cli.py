@@ -428,10 +428,13 @@ def run(
                 try:
                     from prompt_toolkit import prompt as pt_prompt
 
-                    new_msg = pt_prompt(
-                        "New commit message (subject only, no [TYPE] prefix): ",
-                        default=cmsg,
-                    ).strip() or cmsg
+                    new_msg = (
+                        pt_prompt(
+                            "New commit message (subject only, no [TYPE] prefix): ",
+                            default=cmsg,
+                        ).strip()
+                        or cmsg
+                    )
                 except Exception:
                     new_msg = (
                         typer.prompt(
