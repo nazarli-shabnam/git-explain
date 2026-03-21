@@ -8,6 +8,14 @@ from dataclasses import dataclass
 from google import genai
 from google.genai import types
 
+from git_explain.path_topics import (
+    area_scope_suffix,
+    basename_fallback_topic,
+    infra_deploy_topics,
+    is_test_path,
+    test_subject_hints,
+)
+
 SYSTEM_PROMPT = """You are given a list of changed/added files under ## Staged, ## Unstaged, ## Untracked.
 Each file line is: <STATUS> <PATH> where STATUS is one of:
 - A = added/new file
@@ -20,13 +28,18 @@ Suggest one commit that includes ALL of these files.
 
 Rules:
 1. Line 1 must be: git add <path1> <path2> ... with EVERY PATH from the list (all sections). Do not omit any file. Do not truncate. Do not include status letters.
-2. Line 2 must be: git commit -m "[TYPE] Message" with TYPE one of: FEAT, FIX, DOCS, REFACTOR, TEST.
+2. Line 2 must be: git commit -m "[TYPE] Message" with TYPE one of: FEAT, FIX, DOCS, REFACTOR, TEST, CHORE.
 3. The message must be a short, specific summary of what the change does based on the file names (e.g. "Add README and feature status doc", "Fix Gemini model and add file-list mode"). Never use only generic words like "update", "changes", or "refactor" by themselves—always add what was updated (e.g. "Update docs and CLI prompt").
-4. Use imperative, no period at end. Maximum one short line.
+4. Infer concrete artifacts from paths when obvious: Dockerfiles, Docker Compose files, nginx configs, .env/.env.example templates, CI workflows—not vague summaries like "add changes" or "add files" with no subject. For test paths (e.g. tests/test_foo.py), name the area under test (e.g. "Expand tests for foo and bar")—not "update project files".
+5. Use imperative, no period at end. Maximum one short line.
 
 Example for files README.md, FEATURES.md, git_explain/gemini.py:
 git add README.md FEATURES.md git_explain/gemini.py
 git commit -m "[DOCS] Add README and FEATURES doc, tune Gemini prompt"
+
+Example for Docker + nginx + env templates under api/ and apps/frontend/:
+git add api/app/Dockerfile apps/frontend/nginx.conf
+git commit -m "[CHORE] Add Docker and nginx config with env examples for api and frontend"
 """
 
 SYSTEM_PROMPT_WITH_DIFF = """You are given:
@@ -34,10 +47,11 @@ SYSTEM_PROMPT_WITH_DIFF = """You are given:
 2. The full diff (## Staged diff, ## Unstaged diff, ## Untracked) showing exact code changes.
 
 Use the diff to write a specific, detailed commit message. Do not use generic words like "update" or "changes"—describe what actually changed (e.g. "add opt-in --with-diff to send full diff to LLM for detailed messages", "tweak commit message edit flow to show suggestion before prompting to edit").
+Name concrete pieces from paths when helpful (Docker, nginx, env templates, workflows)—avoid empty phrases like "add changes" that do not say what was added.
 
 Output format (conventional commits style):
 - Line 1: git add <path1> <path2> ... with EVERY path from the file list. Do not omit any.
-- Line 2: git commit -m "type: subject" where type is exactly one of: feat, fix, docs, refactor, test.
+- Line 2: git commit -m "type: subject" where type is exactly one of: feat, fix, docs, refactor, test, chore.
   The subject must be a short, specific summary in imperative mood, no period at end (e.g. "feat: allow editing commit message before apply", "fix: parse conventional commit line from AI").
 
 Example:
@@ -47,15 +61,38 @@ git commit -m "feat: add opt-in --with-diff for detailed AI commit messages"
 
 ADD_LINE_RE = re.compile(r"git\s+add\s+(.+)", re.IGNORECASE)
 COMMIT_LINE_RE = re.compile(
-    r'git\s+commit\s+-m\s+["\']\[(FEAT|FIX|DOCS|REFACTOR|TESTS)\]\s*(.+?)["\']',
+    r'git\s+commit\s+-m\s+["\']\[(FEAT|FIX|DOCS|REFACTOR|TESTS|CHORE)\]\s*(.+?)["\']',
     re.IGNORECASE,
 )
 # Conventional: "feat: subject" or "fix: subject" (use "tests" not "test")
 COMMIT_LINE_CONVENTIONAL_RE = re.compile(
-    r'git\s+commit\s+-m\s+["\'](feat|fix|docs|refactor|tests)\s*:\s*(.+?)["\']',
+    r'git\s+commit\s+-m\s+["\'](feat|fix|docs|refactor|tests|chore)\s*:\s*(.+?)["\']',
     re.IGNORECASE,
 )
 DEFAULT_MODEL = "gemini-2.5-flash"
+
+_VAGUE_VERB_NOUN = re.compile(
+    r"^(add|update|modify|make)\s+(changes?|updates?|stuff|things)\s*$",
+    re.IGNORECASE,
+)
+
+# After add/update/modify/make, these tails are too vague to keep as the final message.
+_VAGUE_TAIL_AFTER_VERB = frozenset(
+    {
+        "project files",
+        "the project",
+        "the codebase",
+        "codebase",
+        "code",
+        "files",
+        "file",
+        "some files",
+        "various files",
+        "multiple files",
+        "dependencies",
+        "deps",
+    }
+)
 
 _GENERIC_MESSAGES = {
     "update",
@@ -80,6 +117,25 @@ def _is_generic_message(message: str) -> bool:
         return True
     if msg in _GENERIC_MESSAGES:
         return True
+    if _VAGUE_VERB_NOUN.match(msg):
+        return True
+    parts = msg.split()
+    if len(parts) == 2 and parts[0] in (
+        "add",
+        "update",
+        "modify",
+        "make",
+    ) and parts[1] in ("changes", "change", "updates", "update", "files", "file"):
+        return True
+    if len(parts) >= 2 and parts[0] in (
+        "add",
+        "update",
+        "modify",
+        "make",
+    ):
+        tail = " ".join(parts[1:]).strip()
+        if tail in _VAGUE_TAIL_AFTER_VERB:
+            return True
     # "update X" is okay, but bare "update" or "update stuff" isn't
     if re.fullmatch(
         r"(update|updates|change|changes|refactor|refactoring|misc)(\s+.+)?", msg
@@ -127,8 +183,12 @@ def _fallback_type_and_message_with_context(
 
     verb = "Add" if (added_any or has_commits is False) else "Update"
 
+    all_test_paths = bool(files) and all(is_test_path(f) for f in files)
+
     if docs_only:
         commit_type = "DOCS"
+    elif all_test_paths:
+        commit_type = "TEST"
     elif verb == "Add":
         commit_type = "FEAT"
     else:
@@ -139,6 +199,17 @@ def _fallback_type_and_message_with_context(
         topics.append("README")
     if any(f.endswith("features.md") for f in lower):
         topics.append("FEATURES doc")
+    topics.extend(infra_deploy_topics(files))
+    test_files = [f for f in files if is_test_path(f)]
+    if test_files:
+        all_tests_only = len(test_files) == len(files)
+        hints = test_subject_hints(files)
+        if all_tests_only and hints:
+            head = " and ".join(hints[:3])
+            tail = f" (+{len(hints) - 3} more)" if len(hints) > 3 else ""
+            topics.append(f"tests for {head}{tail}")
+        else:
+            topics.append("tests")
     if touches_docs and not docs_only:
         topics.append("docs")
     if any(f.startswith("git_explain/") for f in lower) or any(
@@ -154,12 +225,13 @@ def _fallback_type_and_message_with_context(
     if touches_packaging:
         topics.append("packaging config")
 
-    if not topics:
-        topics = ["project files"]
-
     # Dedupe while keeping order
     seen: set[str] = set()
     topics = [t for t in topics if not (t in seen or seen.add(t))]
+
+    if not topics:
+        fb = basename_fallback_topic(files)
+        topics = [fb] if fb else ["project files"]
 
     if len(topics) == 1:
         msg = f"{verb} {topics[0]}"
@@ -167,6 +239,8 @@ def _fallback_type_and_message_with_context(
         msg = f"{verb} {topics[0]} and {topics[1]}"
     else:
         msg = f"{verb} {topics[0]}, {topics[1]}, and {topics[2]}"
+
+    msg += area_scope_suffix(files)
 
     if verb == "Add" and (has_commits is False):
         # Make initial commits a little clearer but still "Add …"

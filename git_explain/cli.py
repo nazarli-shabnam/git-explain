@@ -264,36 +264,11 @@ def run(
         return
 
     norm_paths = [c.path.replace("\\", "/") for c in changes]
-    untracked_indices_by_root: dict[str, list[int]] = {}
-    for idx, (ch, np) in enumerate(zip(changes, norm_paths)):
-        if (
-            "Untracked" in ch.sections
-            and "Staged" not in ch.sections
-            and "Unstaged" not in ch.sections
-            and "/" in np
-        ):
-            root = np.split("/", 1)[0]
-            untracked_indices_by_root.setdefault(root, []).append(idx)
-    folder_groups = {
-        root: idxs for root, idxs in untracked_indices_by_root.items() if len(idxs) > 1
-    }
-
     display_items: list[tuple[str, list[int]]] = []
-    seen_untracked_roots: set[str] = set()
     for idx, ch in enumerate(changes):
-        np = norm_paths[idx]
-        root = np.split("/", 1)[0] if "/" in np else None
-        if root and root in folder_groups:
-            if root in seen_untracked_roots:
-                continue
-            seen_untracked_roots.add(root)
-            count = len(folder_groups[root])
-            label = f"{root}/ (untracked folder; {count} files)"
-            display_items.append((label, folder_groups[root]))
-        else:
-            sec = ",".join([s.lower() for s in ch.sections if s and s != "Meta"])
-            label = f"[{ch.status}] ({sec}) {ch.path}"
-            display_items.append((label, [idx]))
+        sec = ",".join([s.lower() for s in ch.sections if s and s != "Meta"])
+        label = f"[{ch.status}] ({sec}) {ch.path}"
+        display_items.append((label, [idx]))
 
     lines = []
     for idx, (label, _idxs) in enumerate(display_items, start=1):
@@ -347,8 +322,9 @@ def run(
 
     def suggest_for(
         change_items: list[tuple[str, str]], title: str
-    ) -> tuple[list[str], str, str, str]:
-        # Returns (paths, type, message, raw_text)
+    ) -> tuple[list[str], str, str, str, str | None]:
+        # Returns (paths, type, message, raw_text, ai_fallback_reason).
+        # ai_fallback_reason is set when --ai was used but heuristics were used instead.
         if ai:
             payload = _render_combined(has_commits, change_items, title=title)
             if with_diff:
@@ -360,7 +336,7 @@ def run(
                 sug, raw = suggest_commands(payload, model=model, with_diff=with_diff)
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
-                return sug.add_args, sug.commit_type, sug.commit_message, raw
+                return sug.add_args, sug.commit_type, sug.commit_message, raw, None
             except Exception as e:
                 # Fall back to heuristics on quota / API errors
                 h = suggest_from_changes(changes=change_items, has_commits=has_commits)
@@ -368,10 +344,11 @@ def run(
                     h.add_args,
                     h.commit_type,
                     h.commit_message,
-                    f"AI unavailable: {e}",
+                    "",
+                    str(e),
                 )
         h = suggest_from_changes(changes=change_items, has_commits=has_commits)
-        return h.add_args, h.commit_type, h.commit_message, ""
+        return h.add_args, h.commit_type, h.commit_message, "", None
 
     selected_pairs = [(ch.status, ch.path) for ch in selected]
     unique_paths = {p for _, p in selected_pairs}
@@ -385,14 +362,44 @@ def run(
             mode = mode_input
 
     plan: list[tuple[str, list[str], str, str]] = []
+    ai_fallback_notes: list[tuple[str, str]] = []
     if mode == "split":
         groups = _group_changes(selected_pairs)
         for gname, items in groups.items():
-            paths, ctype, cmsg, _raw = suggest_for(items, title=gname.capitalize())
+            paths, ctype, cmsg, _raw, fb = suggest_for(
+                items, title=gname.capitalize()
+            )
             plan.append((gname, paths, ctype, cmsg))
+            if fb:
+                ai_fallback_notes.append((gname, fb))
     else:
-        paths, ctype, cmsg, _raw = suggest_for(selected_pairs, title="Selected")
+        paths, ctype, cmsg, _raw, fb = suggest_for(selected_pairs, title="Selected")
         plan.append(("one", paths, ctype, cmsg))
+        if fb:
+            ai_fallback_notes.append(("", fb))
+
+    if ai and ai_fallback_notes:
+        lines = [
+            "[bold]You used --ai, but Gemini was not used for the suggestion below.[/bold]",
+            "Commit message(s) come from [bold]local heuristics[/bold] instead.",
+            "",
+        ]
+        if mode == "split":
+            for gname, reason in ai_fallback_notes:
+                lines.append(f"[dim]{gname}:[/dim] {reason}")
+        else:
+            lines.append(ai_fallback_notes[0][1])
+        lines.append("")
+        lines.append(
+            "[dim]Check API key (GEMINI_API_KEY / GOOGLE_API_KEY), quota, model name, and network.[/dim]"
+        )
+        console.print(
+            Panel(
+                "\n".join(lines),
+                title="[yellow]Warning: AI unavailable[/yellow]",
+                border_style="yellow",
+            )
+        )
 
     def _render_plan(pl: list[tuple[str, list[str], str, str]]) -> str:
         rendered: list[str] = []

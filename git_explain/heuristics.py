@@ -5,10 +5,17 @@ from __future__ import annotations
 import os
 
 from git_explain.gemini import Suggestion
+from git_explain.path_topics import (
+    area_scope_suffix,
+    basename_fallback_topic,
+    infra_deploy_topics,
+    is_infra_deploy_path,
+    is_test_path,
+    test_subject_hints,
+)
 
 
 DOC_EXTS = {".md", ".rst", ".txt"}
-TEST_HINTS = ("test", "tests", "pytest", "unittest")
 CONFIG_FILES = {
     "pyproject.toml",
     "requirements.txt",
@@ -32,25 +39,15 @@ def _is_doc(path: str) -> bool:
     }
 
 
-def _is_test(path: str) -> bool:
-    p = path.lower()
-    base = os.path.basename(p)
-    if p.startswith("tests/") or "/tests/" in p:
-        return True
-    if (
-        base.startswith("test_")
-        or base.endswith("_test.py")
-        or base.endswith(".spec.ts")
-        or base.endswith(".spec.tsx")
-    ):
-        return True
-    return any(h in p for h in TEST_HINTS)
-
-
-def _is_config(path: str) -> bool:
+def _is_plain_config(path: str) -> bool:
     p = path.lower()
     base = os.path.basename(p)
     return base in CONFIG_FILES or os.path.splitext(p)[1] in CONFIG_EXTS
+
+
+def _is_config(path: str) -> bool:
+    """Packaging/config files plus Docker, Compose, nginx, env templates."""
+    return _is_plain_config(path) or is_infra_deploy_path(path)
 
 
 def suggest_from_changes(
@@ -63,7 +60,7 @@ def suggest_from_changes(
     added_any = any(s.upper() == "A" for s, _ in changes) or has_commits is False
 
     docs = [p for p in paths if _is_doc(p)]
-    tests = [p for p in paths if _is_test(p)]
+    tests = [p for p in paths if is_test_path(p)]
     configs = [p for p in paths if _is_config(p)]
     has_tests = bool(tests)
     has_configs = bool(configs)
@@ -96,19 +93,28 @@ def suggest_from_changes(
         topics.append("README")
     if any(os.path.basename(p).lower() == "features.md" for p in paths):
         topics.append("FEATURES doc")
+    topics.extend(infra_deploy_topics(paths))
     if tests:
-        topics.append("tests")
-    if configs:
+        all_tests_only = bool(paths) and len(tests) == len(paths)
+        hints = test_subject_hints(paths)
+        if all_tests_only and hints:
+            head = " and ".join(hints[:3])
+            tail = f" (+{len(hints) - 3} more)" if len(hints) > 3 else ""
+            topics.append(f"tests for {head}{tail}")
+        else:
+            topics.append("tests")
+    if any(_is_plain_config(p) for p in paths):
         topics.append("config")
     if any("git_explain/" in p.replace("\\", "/").lower() for p in paths):
         topics.append("git-explain CLI")
 
-    if not topics:
-        topics = ["changes"]
-
     # Dedupe while preserving order
     seen: set[str] = set()
     topics = [t for t in topics if not (t in seen or seen.add(t))]
+
+    if not topics:
+        fb = basename_fallback_topic(paths)
+        topics = [fb] if fb else ["project files"]
 
     if len(topics) == 1:
         message = f"{verb} {topics[0]}"
@@ -117,7 +123,12 @@ def suggest_from_changes(
     else:
         message = f"{verb} {topics[0]}, {topics[1]}, and {topics[2]}"
 
+    message += area_scope_suffix(paths)
+
     if added_any and has_commits is False and message.startswith("Add "):
         message = message.replace("Add ", "Add initial ", 1)
+
+    if len(message) > 72:
+        message = message[:72].rstrip()
 
     return Suggestion(add_args=paths, commit_type=commit_type, commit_message=message)
