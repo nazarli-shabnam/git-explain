@@ -104,7 +104,7 @@ You’ll see a list of changed files, choose which to include, then get suggeste
 
 ## Workflow
 
-1. **Changed files** — Shows staged, unstaged, and untracked files. Untracked folders are grouped (e.g. `foo/ (untracked folder; 5 files)`).
+1. **Changed files** — Shows staged, unstaged, and untracked files. Untracked directories are expanded so you still see per-file paths.
 2. **Select files** — Enter numbers (e.g. `1,2,5-7`), `all`, or a path (e.g. `main.py`, `src/utils/`).
 3. **Commit mode** — If you selected 2+ files: choose `one` (single commit) or `split` (separate commits by docs/tests/config/code).
 4. **Suggested commands** — Panel with `git add` and `git commit` lines.
