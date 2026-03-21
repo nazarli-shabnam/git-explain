@@ -120,12 +120,17 @@ def _is_generic_message(message: str) -> bool:
     if _VAGUE_VERB_NOUN.match(msg):
         return True
     parts = msg.split()
-    if len(parts) == 2 and parts[0] in (
-        "add",
-        "update",
-        "modify",
-        "make",
-    ) and parts[1] in ("changes", "change", "updates", "update", "files", "file"):
+    if (
+        len(parts) == 2
+        and parts[0]
+        in (
+            "add",
+            "update",
+            "modify",
+            "make",
+        )
+        and parts[1] in ("changes", "change", "updates", "update", "files", "file")
+    ):
         return True
     if len(parts) >= 2 and parts[0] in (
         "add",

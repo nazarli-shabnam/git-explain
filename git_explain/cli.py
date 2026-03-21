@@ -366,9 +366,7 @@ def run(
     if mode == "split":
         groups = _group_changes(selected_pairs)
         for gname, items in groups.items():
-            paths, ctype, cmsg, _raw, fb = suggest_for(
-                items, title=gname.capitalize()
-            )
+            paths, ctype, cmsg, _raw, fb = suggest_for(items, title=gname.capitalize())
             plan.append((gname, paths, ctype, cmsg))
             if fb:
                 ai_fallback_notes.append((gname, fb))
