@@ -20,6 +20,8 @@ load_dotenv()
 app = typer.Typer()
 console = Console()
 
+_DIFF_INFER_MAX_CHARS = 50_000
+
 
 @dataclass(frozen=True)
 class Change:
@@ -325,6 +327,17 @@ def run(
     ) -> tuple[list[str], str, str, str, str | None]:
         # Returns (paths, type, message, raw_text, ai_fallback_reason).
         # ai_fallback_reason is set when --ai was used but heuristics were used instead.
+        paths_for_infer = [p for _, p in change_items]
+        infer_diff: str | None = None
+        if paths_for_infer:
+            raw_d = get_diff_for_paths(paths_for_infer, cwd=repo_root)
+            if raw_d.strip():
+                infer_diff = (
+                    raw_d[:_DIFF_INFER_MAX_CHARS]
+                    if len(raw_d) > _DIFF_INFER_MAX_CHARS
+                    else raw_d
+                )
+
         if ai:
             payload = _render_combined(has_commits, change_items, title=title)
             if with_diff:
@@ -333,13 +346,22 @@ def run(
                 if diff_text:
                     payload = payload + "\n\n## Diff\n" + diff_text
             try:
-                sug, raw = suggest_commands(payload, model=model, with_diff=with_diff)
+                sug, raw = suggest_commands(
+                    payload,
+                    model=model,
+                    with_diff=with_diff,
+                    unified_diff_for_infer=infer_diff,
+                )
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
                 return sug.add_args, sug.commit_type, sug.commit_message, raw, None
             except Exception as e:
                 # Fall back to heuristics on quota / API errors
-                h = suggest_from_changes(changes=change_items, has_commits=has_commits)
+                h = suggest_from_changes(
+                    changes=change_items,
+                    has_commits=has_commits,
+                    diff_text=infer_diff,
+                )
                 return (
                     h.add_args,
                     h.commit_type,
@@ -347,7 +369,11 @@ def run(
                     "",
                     str(e),
                 )
-        h = suggest_from_changes(changes=change_items, has_commits=has_commits)
+        h = suggest_from_changes(
+            changes=change_items,
+            has_commits=has_commits,
+            diff_text=infer_diff,
+        )
         return h.add_args, h.commit_type, h.commit_message, "", None
 
     selected_pairs = [(ch.status, ch.path) for ch in selected]
@@ -355,11 +381,18 @@ def run(
 
     mode = "one"
     if len(unique_paths) > 1:
-        mode_input = (
-            typer.prompt("Commit mode: one or split", default="one").strip().lower()
-        )
-        if mode_input in ("one", "split"):
-            mode = mode_input
+        if staged_only:
+            console.print(
+                "[dim]Note:[/dim] split commits are not available with --staged-only: "
+                "each commit would need its own staging, but this mode skips git add. "
+                "Using a single commit for everything currently staged."
+            )
+        else:
+            mode_input = (
+                typer.prompt("Commit mode: one or split", default="one").strip().lower()
+            )
+            if mode_input in ("one", "split"):
+                mode = mode_input
 
     plan: list[tuple[str, list[str], str, str]] = []
     ai_fallback_notes: list[tuple[str, str]] = []
@@ -471,7 +504,13 @@ def run(
     if do_apply:
         for name, paths, ctype, cmsg in plan:
             try:
-                apply_commands(repo_root, [] if staged_only else paths, ctype, cmsg)
+                apply_commands(
+                    repo_root,
+                    [] if staged_only else paths,
+                    ctype,
+                    cmsg,
+                    staged_only=staged_only,
+                )
                 console.print(f"[green]Commit created ({name}).[/green]")
             except subprocess.CalledProcessError as e:
                 console.print("[red]git command failed.[/red]")
