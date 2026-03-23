@@ -95,7 +95,7 @@ You’ll see a list of changed files, choose which to include, then get suggeste
 | `--ai` | Use Gemini for commit type/message (file paths only). |
 | `--with-diff` | With `--ai`: send full diff to the model for detailed messages. |
 | `--model NAME` | Override Gemini model (e.g. `--model gemini-2.0-flash`). |
-| `--staged-only` | Commit only what’s already staged (no `git add`). |
+| `--staged-only` | Commit only what’s already staged (no `git add`). Always one commit for the whole index—split-by-group mode is disabled, because Git would commit the entire index on the first step and later steps would have nothing left staged. |
 | `--cwd PATH` | Run as if current directory is `PATH`. |
 | `--install-completion [SHELL]` | Install shell completion (`bash`, `zsh`). |
 | `--show-completion [SHELL]` | Print completion script for `SHELL`. |
