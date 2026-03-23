@@ -27,11 +27,17 @@ def apply_commands(
     add_args: list[str],
     commit_type: str,
     commit_message: str,
+    *,
+    staged_only: bool = False,
 ) -> None:
     """Stage selected paths and commit. Raises on failure.
 
     Uses `git add -A -- <paths...>` to properly handle deletes/renames.
     Verifies that something is staged before attempting the commit.
+
+    When ``staged_only`` is True, ``git add`` is skipped (``add_args`` should be
+    empty); the current index is committed as-is. Split multi-commit plans are
+    not supported in that mode because each ``git commit`` empties the index.
     """
     root = Path(repo_root)
     if add_args:
@@ -43,6 +49,11 @@ def apply_commands(
             text=True,
         )
     if not _has_staged_changes(root):
+        if staged_only:
+            raise RuntimeError(
+                "Nothing is currently staged. With --staged-only, git-explain does "
+                "not run git add; stage your changes first, then try again."
+            )
         raise RuntimeError("Nothing staged after git add; aborting commit.")
     full_message = f"[{commit_type}] {commit_message}"
     subprocess.run(

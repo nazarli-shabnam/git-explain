@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from git_explain.commit_infer import refine_type_and_message_from_diff
 from git_explain.gemini import Suggestion
 from git_explain.path_topics import (
     area_scope_suffix,
@@ -54,10 +55,12 @@ def suggest_from_changes(
     *,
     changes: list[tuple[str, str]],
     has_commits: bool | None,
+    diff_text: str | None = None,
 ) -> Suggestion:
     """Create a Suggestion from [(status, path)] without calling AI."""
     paths = [p for _, p in changes]
     added_any = any(s.upper() == "A" for s, _ in changes) or has_commits is False
+    modified_any = any(s.upper() == "M" for s, _ in changes)
 
     docs = [p for p in paths if _is_doc(p)]
     tests = [p for p in paths if is_test_path(p)]
@@ -72,7 +75,12 @@ def suggest_from_changes(
         tc = len([p for p in non_docs if p in tests or p in configs])
         mostly_tests_or_config = tc / max(1, len(non_docs)) >= 0.6
 
-    verb = "Add" if added_any else "Update"
+    if has_commits is False:
+        verb = "Add"
+    elif added_any and not modified_any:
+        verb = "Add"
+    else:
+        verb = "Update"
 
     if docs_only:
         commit_type = "DOCS"
@@ -105,8 +113,23 @@ def suggest_from_changes(
             topics.append("tests")
     if any(_is_plain_config(p) for p in paths):
         topics.append("config")
-    if any("git_explain/" in p.replace("\\", "/").lower() for p in paths):
-        topics.append("git-explain CLI")
+    ge_paths = [p for p in paths if "git_explain/" in p.replace("\\", "/").lower()]
+    if ge_paths:
+        if len(ge_paths) <= 2:
+            topics.append("git-explain CLI")
+        else:
+            stems: list[str] = []
+            seen_stem: set[str] = set()
+            for p in sorted(ge_paths, key=lambda x: x.lower()):
+                stem, _ext = os.path.splitext(os.path.basename(p))
+                key = stem.lower()
+                if key not in seen_stem:
+                    seen_stem.add(key)
+                    stems.append(stem.replace("_", " "))
+            label = ", ".join(stems[:4])
+            if len(stems) > 4:
+                label += f" (+{len(stems) - 4} more)"
+            topics.append(label)
 
     # Dedupe while preserving order
     seen: set[str] = set()
@@ -130,5 +153,9 @@ def suggest_from_changes(
 
     if len(message) > 72:
         message = message[:72].rstrip()
+
+    commit_type, message = refine_type_and_message_from_diff(
+        commit_type, message, diff_text
+    )
 
     return Suggestion(add_args=paths, commit_type=commit_type, commit_message=message)
