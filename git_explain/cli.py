@@ -13,7 +13,11 @@ from rich.text import Text
 
 from git_explain.gemini import suggest_commands
 from git_explain.heuristics import suggest_from_changes
-from git_explain.git import get_combined_diff, get_diff_for_paths
+from git_explain.git import (
+    get_combined_diff,
+    get_diff_for_paths,
+    get_staged_diff_for_paths,
+)
 from git_explain.run import apply_commands
 
 load_dotenv()
@@ -160,6 +164,12 @@ def _group_changes(changes: list[tuple[str, str]]) -> dict[str, list[tuple[str, 
             ".gitignore",
         } or p2.endswith((".toml", ".yml", ".yaml", ".json", ".ini", ".cfg", ".lock"))
 
+    def is_code(p: str) -> bool:
+        p2 = p.lower()
+        return p2.endswith(
+            (".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".php", ".cs")
+        )
+
     groups: dict[str, list[tuple[str, str]]] = {
         "docs": [],
         "tests": [],
@@ -174,11 +184,40 @@ def _group_changes(changes: list[tuple[str, str]]) -> dict[str, list[tuple[str, 
             groups["tests"].append((st, p))
         elif is_config(p):
             groups["config"].append((st, p))
-        elif p.lower().replace("\\", "/").startswith("git_explain/"):
+        elif is_code(p):
             groups["code"].append((st, p))
         else:
             groups["other"].append((st, p))
     return {k: v for k, v in groups.items() if v}
+
+
+def _validate_suggest_flags(
+    *,
+    suggest: bool,
+    auto: bool,
+    ai: bool,
+    staged_only: bool,
+    model: str | None,
+    with_diff: bool,
+) -> None:
+    if not suggest:
+        return
+    bad: list[str] = []
+    if auto:
+        bad.append("--auto")
+    if ai:
+        bad.append("--ai")
+    if staged_only:
+        bad.append("--staged-only")
+    if with_diff:
+        bad.append("--with-diff")
+    if model is not None:
+        bad.append("--model")
+    if bad:
+        raise typer.BadParameter(
+            "--suggest is a dedicated mode and cannot be combined with: "
+            + ", ".join(bad)
+        )
 
 
 @app.callback(invoke_without_command=True)
@@ -211,9 +250,22 @@ def main(
         "--with-diff",
         help="With --ai: send full diff to the model for detailed, specific commit messages (opt-in).",
     ),
+    suggest: bool = typer.Option(
+        False,
+        "--suggest",
+        help="AI suggestion-only mode: use staged files + staged diff and print only commit command.",
+    ),
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
+    _validate_suggest_flags(
+        suggest=suggest,
+        auto=auto,
+        ai=ai,
+        staged_only=staged_only,
+        model=model,
+        with_diff=with_diff,
+    )
     run(
         cwd=Path(cwd) if cwd else None,
         auto=auto,
@@ -221,6 +273,7 @@ def main(
         staged_only=staged_only,
         model=model,
         with_diff=with_diff,
+        suggest=suggest,
     )
 
 
@@ -231,6 +284,7 @@ def run(
     staged_only: bool = False,
     model: str | None = None,
     with_diff: bool = False,
+    suggest: bool = False,
 ) -> None:
     console.print(Text("git-explain", style="bold"))
     if with_diff and not ai:
@@ -254,6 +308,49 @@ def run(
         return
     has_commits, changes = _parse_combined(combined)
     console.print(Panel(combined, title="Changed files", border_style="dim"))
+
+    if suggest:
+        staged_changes = [c for c in changes if "Staged" in c.sections]
+        if not staged_changes:
+            console.print(
+                "[yellow]Warning:[/yellow] --suggest requires staged changes. "
+                "Stage files first (git add ...), then run --suggest again."
+            )
+            raise typer.Exit(1)
+        selected_pairs = [(ch.status, ch.path) for ch in staged_changes]
+        payload = _render_combined(has_commits, selected_pairs, title="Staged")
+        paths = [p for _, p in selected_pairs]
+        staged_diff = get_staged_diff_for_paths(paths, cwd=repo_root)
+        if staged_diff:
+            payload = payload + "\n\n## Diff\n" + staged_diff
+        infer_diff = (
+            staged_diff[:_DIFF_INFER_MAX_CHARS]
+            if len(staged_diff) > _DIFF_INFER_MAX_CHARS
+            else staged_diff
+        )
+        try:
+            sug, _raw = suggest_commands(
+                payload,
+                model=None,
+                with_diff=True,
+                unified_diff_for_infer=infer_diff,
+            )
+            if sug is None:
+                raise RuntimeError("Could not parse AI suggestion.")
+        except Exception as e:
+            console.print(
+                f"[red]Error:[/red] --suggest requires AI and failed to get a suggestion: {e}"
+            )
+            raise typer.Exit(1)
+
+        console.print(
+            Panel(
+                f'git commit -m "[{sug.commit_type}] {sug.commit_message}"',
+                title="Suggested commit command",
+                border_style="green",
+            )
+        )
+        return
 
     if staged_only:
         changes = [c for c in changes if "Staged" in c.sections]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from git_explain.commit_infer import refine_type_and_message_from_diff
 from git_explain.gemini import Suggestion
@@ -28,6 +29,7 @@ CONFIG_FILES = {
     "license.md",
 }
 CONFIG_EXTS = {".toml", ".yml", ".yaml", ".json", ".ini", ".cfg", ".lock"}
+CODE_EXTS = {".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".php", ".cs"}
 
 
 def _is_doc(path: str) -> bool:
@@ -49,6 +51,40 @@ def _is_plain_config(path: str) -> bool:
 def _is_config(path: str) -> bool:
     """Packaging/config files plus Docker, Compose, nginx, env templates."""
     return _is_plain_config(path) or is_infra_deploy_path(path)
+
+
+def _code_topics(paths: list[str]) -> list[str]:
+    labeled: list[tuple[str, str]] = []  # (folder_label, stem)
+    for p in paths:
+        p2 = p.replace("\\", "/")
+        base = os.path.basename(p2)
+        ext = os.path.splitext(base)[1].lower()
+        if ext not in CODE_EXTS:
+            continue
+        stem = os.path.splitext(base)[0].replace("_", " ")
+        parts = [x for x in p2.split("/") if x]
+        folder = parts[-2] if len(parts) >= 2 else stem
+        labeled.append((folder.replace("_", " "), stem))
+
+    if not labeled:
+        return []
+
+    folder_set = {f.lower() for f, _ in labeled}
+    prefer_stems = len(folder_set) == 1 and len(labeled) >= 2
+
+    topics: list[str] = []
+    seen: set[str] = set()
+    for folder, stem in labeled:
+        label = stem if prefer_stems else folder
+        key = label.lower()
+        if key not in seen:
+            seen.add(key)
+            topics.append(label)
+    return topics
+
+
+def _alnum_key(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 
 
 def suggest_from_changes(
@@ -113,23 +149,12 @@ def suggest_from_changes(
             topics.append("tests")
     if any(_is_plain_config(p) for p in paths):
         topics.append("config")
-    ge_paths = [p for p in paths if "git_explain/" in p.replace("\\", "/").lower()]
-    if ge_paths:
-        if len(ge_paths) <= 2:
-            topics.append("git-explain CLI")
-        else:
-            stems: list[str] = []
-            seen_stem: set[str] = set()
-            for p in sorted(ge_paths, key=lambda x: x.lower()):
-                stem, _ext = os.path.splitext(os.path.basename(p))
-                key = stem.lower()
-                if key not in seen_stem:
-                    seen_stem.add(key)
-                    stems.append(stem.replace("_", " "))
-            label = ", ".join(stems[:4])
-            if len(stems) > 4:
-                label += f" (+{len(stems) - 4} more)"
-            topics.append(label)
+    code_topics = _code_topics(paths)
+    if code_topics:
+        label = ", ".join(code_topics[:4])
+        if len(code_topics) > 4:
+            label += f" (+{len(code_topics) - 4} more)"
+        topics.append(label)
 
     # Dedupe while preserving order
     seen: set[str] = set()
@@ -146,7 +171,12 @@ def suggest_from_changes(
     else:
         message = f"{verb} {topics[0]}, {topics[1]}, and {topics[2]}"
 
-    message += area_scope_suffix(paths)
+    scope = area_scope_suffix(paths)
+    if scope:
+        scope_key = _alnum_key(scope.replace("for", "", 1))
+        msg_key = _alnum_key(message)
+        if scope_key and scope_key not in msg_key:
+            message += scope
 
     if added_any and has_commits is False and message.startswith("Add "):
         message = message.replace("Add ", "Add initial ", 1)

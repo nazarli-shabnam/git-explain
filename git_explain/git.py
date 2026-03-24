@@ -168,3 +168,19 @@ def get_diff_for_paths(paths: list[str], cwd: str | Path | None = None) -> str:
                 parts.append(f"## Untracked (new file): {p}\n<binary or unreadable>")
 
     return "\n\n".join(parts)
+
+
+def get_staged_diff_for_paths(paths: list[str], cwd: str | Path | None = None) -> str:
+    """Return staged-only unified diff for the given paths."""
+    if not paths:
+        return ""
+    root = get_repo_root(cwd)
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--"] + paths,
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return ""
