@@ -113,6 +113,65 @@ _GENERIC_MESSAGES = {
     "misc",
 }
 
+CODE_EXTS = {".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".php", ".cs"}
+_WEAK_TOPIC_WORDS = {
+    "project",
+    "projects",
+    "repo",
+    "repository",
+    "codebase",
+    "code",
+    "app",
+    "apps",
+    "service",
+    "services",
+    "package",
+    "packages",
+    "module",
+    "modules",
+    "library",
+    "libraries",
+    "cli",
+    "tool",
+    "tools",
+    "git",
+    "explain",
+}
+
+
+def _code_topics(files: list[str]) -> list[str]:
+    labeled: list[tuple[str, str]] = []  # (folder_label, stem)
+    for p in files:
+        p2 = p.replace("\\", "/")
+        base = os.path.basename(p2)
+        ext = os.path.splitext(base)[1].lower()
+        if ext not in CODE_EXTS:
+            continue
+        stem = os.path.splitext(base)[0].replace("_", " ")
+        parts = [x for x in p2.split("/") if x]
+        folder = parts[-2] if len(parts) >= 2 else stem
+        labeled.append((folder.replace("_", " "), stem))
+
+    if not labeled:
+        return []
+
+    folder_set = {f.lower() for f, _ in labeled}
+    prefer_stems = len(folder_set) == 1 and len(labeled) >= 2
+
+    topics: list[str] = []
+    seen: set[str] = set()
+    for folder, stem in labeled:
+        label = stem if prefer_stems else folder
+        key = label.lower()
+        if key not in seen:
+            seen.add(key)
+            topics.append(label)
+    return topics
+
+
+def _alnum_key(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
 
 def _is_generic_message(message: str) -> bool:
     msg = (message or "").strip().lower()
@@ -143,6 +202,27 @@ def _is_generic_message(message: str) -> bool:
     ):
         tail = " ".join(parts[1:]).strip()
         if tail in _VAGUE_TAIL_AFTER_VERB:
+            return True
+    if len(parts) >= 2 and parts[0] in ("add", "update", "modify", "make"):
+        tail_words = re.findall(r"[a-z0-9]+", " ".join(parts[1:]))
+        if (
+            tail_words
+            and len(tail_words) <= 2
+            and all(w in _WEAK_TOPIC_WORDS for w in tail_words)
+        ):
+            return True
+    # Catch category-heavy but still vague summaries such as:
+    # "Update README, docs, and CLI for project"
+    if "readme" in msg and ("docs" in msg or "documentation" in msg):
+        if " for " in msg and any(k in msg for k in ("cli", "project", "codebase")):
+            return True
+    if msg.endswith(" for project") or msg.endswith(" for codebase"):
+        return True
+    m_for = re.match(r"^(add|update|modify|make)\s+(.+?)\s+for\s+(.+)$", msg)
+    if m_for:
+        left = _alnum_key(m_for.group(2))
+        right = _alnum_key(m_for.group(3))
+        if left and right and (left == right or left in right or right in left):
             return True
     # "update X" is okay, but bare "update" or "update stuff" isn't
     if re.fullmatch(
@@ -189,7 +269,9 @@ def _fallback_type_and_message_with_context(
     touches_docs = any(is_doc(f) for f in lower)
     touches_packaging = any(is_packaging(f) for f in lower)
 
-    verb = "Add" if (added_any or has_commits is False) else "Update"
+    # In fallback we don't have per-file status detail here, so use "Add" only
+    # for initial commit. Otherwise prefer "Update" to avoid overclaiming.
+    verb = "Add" if (has_commits is False) else "Update"
 
     all_test_paths = bool(files) and all(is_test_path(f) for f in files)
 
@@ -220,16 +302,12 @@ def _fallback_type_and_message_with_context(
             topics.append("tests")
     if touches_docs and not docs_only:
         topics.append("docs")
-    if any(f.startswith("git_explain/") for f in lower) or any(
-        "/git_explain/" in f for f in lower
-    ):
-        topics.append("git-explain CLI")
-    if any("git_explain/gemini.py" in f for f in lower):
-        topics.append("Gemini integration")
-    if any("git_explain/git.py" in f for f in lower):
-        topics.append("change detection")
-    if any("git_explain/cli.py" in f for f in lower):
-        topics.append("CLI output")
+    code_topics = _code_topics(files)
+    if code_topics:
+        label = ", ".join(code_topics[:4])
+        if len(code_topics) > 4:
+            label += f" (+{len(code_topics) - 4} more)"
+        topics.append(label)
     if touches_packaging:
         topics.append("packaging config")
 
@@ -248,11 +326,21 @@ def _fallback_type_and_message_with_context(
     else:
         msg = f"{verb} {topics[0]}, {topics[1]}, and {topics[2]}"
 
-    msg += area_scope_suffix(files)
+    scope = area_scope_suffix(files)
+    if scope:
+        scope_key = _alnum_key(scope.replace("for", "", 1))
+        msg_key = _alnum_key(msg)
+        if scope_key and scope_key not in msg_key:
+            msg += scope
 
     if verb == "Add" and (has_commits is False):
         # Make initial commits a little clearer but still "Add …"
         msg = msg.replace("Add ", "Add initial ", 1) if msg.startswith("Add ") else msg
+
+    if _is_generic_message(msg):
+        fb = basename_fallback_topic(files)
+        if fb:
+            msg = f"{verb} {fb}"
 
     msg = msg.strip().rstrip(".")
     if len(msg) > 72:
