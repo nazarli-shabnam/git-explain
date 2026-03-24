@@ -62,6 +62,21 @@ def test_is_generic_message_flags_update_project_files() -> None:
     assert _is_generic_message("Update tests for gemini and heuristics") is False
 
 
+def test_is_generic_message_flags_readme_docs_cli_combo() -> None:
+    msg = "Update README, docs, and CLI for project"
+    assert _is_generic_message(msg) is True
+
+
+def test_is_generic_message_flags_for_clause_with_same_topic() -> None:
+    msg = "Update git explain for git_explain"
+    assert _is_generic_message(msg) is True
+
+
+def test_is_generic_message_flags_update_git_explain() -> None:
+    assert _is_generic_message("Update git explain") is True
+    assert _is_generic_message("Update project CLI") is True
+
+
 def test_fallback_uses_test_hints_for_test_files() -> None:
     ctype, msg = _fallback_type_and_message_with_context(
         files=["tests/test_gemini.py", "tests/test_heuristics.py"],
@@ -71,3 +86,45 @@ def test_fallback_uses_test_hints_for_test_files() -> None:
     assert ctype == "TEST"
     assert "gemini" in msg.lower()
     assert "heuristics" in msg.lower()
+
+
+def test_fallback_uses_generic_code_topics_for_many_paths() -> None:
+    ctype, msg = _fallback_type_and_message_with_context(
+        files=[
+            "src/api/router.py",
+            "src/ui/view.ts",
+            "services/auth/index.js",
+            "README.md",
+        ],
+        added_any=False,
+        has_commits=True,
+    )
+    assert ctype in {"REFACTOR", "FIX", "FEAT"}
+    low = msg.lower()
+    assert "git-explain cli" not in low
+    assert "api" in low or "ui" in low or "auth" in low
+
+
+def test_fallback_avoids_redundant_scope_suffix() -> None:
+    _ctype, msg = _fallback_type_and_message_with_context(
+        files=["git_explain/cli.py"],
+        added_any=False,
+        has_commits=True,
+    )
+    low = msg.lower()
+    assert "for git_explain" not in low
+
+
+def test_fallback_prefers_stems_when_folder_is_same() -> None:
+    _ctype, msg = _fallback_type_and_message_with_context(
+        files=[
+            "git_explain/cli.py",
+            "git_explain/gemini.py",
+            "git_explain/git.py",
+        ],
+        added_any=False,
+        has_commits=True,
+    )
+    low = msg.lower()
+    assert "update git explain" not in low
+    assert "cli" in low or "gemini" in low or "git" in low
