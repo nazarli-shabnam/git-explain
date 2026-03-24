@@ -332,7 +332,7 @@ def run(
             sug, _raw = suggest_commands(
                 payload,
                 model=None,
-                with_diff=True,
+                with_diff=bool(staged_diff),
                 unified_diff_for_infer=infer_diff,
             )
             if sug is None:
