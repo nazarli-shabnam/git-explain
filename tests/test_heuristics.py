@@ -23,18 +23,18 @@ def test_added_files_prefer_feat() -> None:
     ) or s.commit_message.lower().startswith("update")
 
 
-def test_many_git_explain_paths_use_module_names_not_umbrella_cli() -> None:
+def test_many_code_paths_use_generic_module_topics() -> None:
     s = suggest_from_changes(
         changes=[
-            ("M", "git_explain/cli.py"),
-            ("M", "git_explain/run.py"),
-            ("M", "git_explain/gemini.py"),
+            ("M", "src/api/router.py"),
+            ("M", "src/ui/view.ts"),
+            ("M", "services/auth/index.js"),
         ],
         has_commits=True,
     )
     m = s.commit_message.lower()
     assert "git-explain cli" not in m
-    assert "cli" in m
+    assert "api" in m or "ui" in m or "auth" in m
 
 
 def test_mostly_tests_or_config_is_test() -> None:
