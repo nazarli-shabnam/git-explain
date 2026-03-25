@@ -389,7 +389,7 @@ def _parse_changed_file_list(diff: str) -> tuple[list[tuple[str, str]], bool | N
             if v in ("true", "false"):
                 has_commits = v == "true"
             continue
-        m = re.match(r"^([AMDRCU])\s+(.+)$", line, re.IGNORECASE)
+        m = re.match(r"^([AMDRCUT])\s+(.+)$", line, re.IGNORECASE)
         if m:
             status = m.group(1).upper()
             path = m.group(2).strip()
