@@ -74,13 +74,14 @@ You’ll see a list of changed files, choose which to include, then get suggeste
 
 ---
 
-## Modes: `git-explain` vs `git-explain --ai` vs `git-explain --with-diff --ai`
+## Modes: `git-explain` vs `git-explain --ai` vs `git-explain --with-diff --ai` vs `git-explain --suggest`
 
 | Command | What it does |
 |---------|--------------|
 | `git-explain` | **Heuristics only.** No API call. Suggests commit type and message from file names and status (e.g. docs, tests, config, code). Fast and private. |
 | `git-explain --ai` | **AI (paths only).** Sends only file paths and statuses (A/M/D) to Gemini. No file contents. Good for smarter messages without sharing code. |
 | `git-explain --with-diff --ai` | **AI (full diff).** Sends file list **plus** the full diff (staged, unstaged, untracked content) to Gemini. Produces detailed, specific messages (e.g. `feat: add opt-in --with-diff for detailed AI commit messages`). Opt-in; use when you want maximum accuracy and are okay sending diff content to the API. |
+| `git-explain --suggest` | **AI staged-only suggestion mode.** Requires staged changes; sends staged file list + staged diff to Gemini and prints only `git commit -m ...`. It never applies changes and cannot be combined with other flags. |
 
 **Summary:** Use plain `git-explain` for speed and privacy. Use `--ai` for better suggestions without sharing code. Use `--with-diff --ai` when you want the most accurate, context-aware messages and accept sending diff content to Gemini.
 
@@ -97,6 +98,7 @@ You’ll see a list of changed files, choose which to include, then get suggeste
 | `--model NAME` | Override Gemini model (e.g. `--model gemini-2.0-flash`). |
 | `--staged-only` | Commit only what’s already staged (no `git add`). Always one commit for the whole index—split-by-group mode is disabled, because Git would commit the entire index on the first step and later steps would have nothing left staged. |
 | `--cwd PATH` | Run as if current directory is `PATH`. |
+| `--suggest` | Dedicated staged-only AI suggestion mode; prints only commit command and exits. Cannot be combined with other flags. |
 | `--install-completion [SHELL]` | Install shell completion (`bash`, `zsh`). |
 | `--show-completion [SHELL]` | Print completion script for `SHELL`. |
 
