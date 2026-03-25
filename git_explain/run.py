@@ -3,6 +3,9 @@
 import subprocess
 from pathlib import Path
 
+# Match git_explain.git: git stdout is UTF-8; avoid Windows default code page decoding.
+_GIT_TEXT = {"encoding": "utf-8", "errors": "replace"}
+
 
 def _has_staged_changes(repo_root: Path) -> bool:
     # Works even for initial commit (unborn HEAD).
@@ -11,7 +14,7 @@ def _has_staged_changes(repo_root: Path) -> bool:
         check=False,
         cwd=repo_root,
         capture_output=True,
-        text=True,
+        **_GIT_TEXT,
     )
     for raw in (r.stdout or "").splitlines():
         if not raw:
@@ -46,7 +49,7 @@ def apply_commands(
             check=True,
             cwd=root,
             capture_output=True,
-            text=True,
+            **_GIT_TEXT,
         )
     if not _has_staged_changes(root):
         if staged_only:
@@ -61,5 +64,5 @@ def apply_commands(
         check=True,
         cwd=root,
         capture_output=True,
-        text=True,
+        **_GIT_TEXT,
     )

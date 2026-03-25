@@ -1,8 +1,11 @@
+import pytest
+
 from git_explain.cli import (
     _group_changes,
     _parse_combined,
     _parse_selection,
     _ps_quote,
+    _validate_suggest_flags,
 )
 
 
@@ -114,6 +117,30 @@ def test_group_changes_config_patterns() -> None:
 
 
 def test_group_changes_code_bucket() -> None:
-    changes = [("M", "git_explain/cli.py")]
+    changes = [("M", "src/app.ts")]
     groups = _group_changes(changes)
-    assert groups["code"] == [("M", "git_explain/cli.py")]
+    assert groups["code"] == [("M", "src/app.ts")]
+
+
+def test_validate_suggest_flags_allows_suggest_alone() -> None:
+    _validate_suggest_flags(
+        suggest=True,
+        auto=False,
+        ai=False,
+        staged_only=False,
+        model=None,
+        with_diff=False,
+    )
+
+
+def test_validate_suggest_flags_rejects_combined_flags() -> None:
+    with pytest.raises(Exception) as ex:
+        _validate_suggest_flags(
+            suggest=True,
+            auto=True,
+            ai=True,
+            staged_only=False,
+            model="gemini-2.5-flash",
+            with_diff=False,
+        )
+    assert "--suggest is a dedicated mode" in str(ex.value)
