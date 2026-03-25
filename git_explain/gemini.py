@@ -79,7 +79,9 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 MAX_COMMIT_SUBJECT_CHARS = 200
 
 
-def truncate_commit_subject(message: str, max_len: int = MAX_COMMIT_SUBJECT_CHARS) -> str:
+def truncate_commit_subject(
+    message: str, max_len: int = MAX_COMMIT_SUBJECT_CHARS
+) -> str:
     """Trim subject for one-line -m; avoid cutting off mid-parenthetical e.g. '(+2 mo'."""
     msg = (message or "").strip().rstrip(".")
     if len(msg) <= max_len:

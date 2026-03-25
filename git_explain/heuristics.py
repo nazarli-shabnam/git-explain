@@ -6,7 +6,11 @@ import os
 import re
 
 from git_explain.commit_infer import refine_type_and_message_from_diff
-from git_explain.gemini import MAX_COMMIT_SUBJECT_CHARS, Suggestion, truncate_commit_subject
+from git_explain.gemini import (
+    MAX_COMMIT_SUBJECT_CHARS,
+    Suggestion,
+    truncate_commit_subject,
+)
 from git_explain.path_topics import (
     area_scope_suffix,
     basename_fallback_topic,
