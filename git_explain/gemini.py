@@ -30,10 +30,10 @@ Suggest one commit that includes ALL of these files.
 Rules:
 1. Line 1 must be: git add <path1> <path2> ... with EVERY PATH from the list (all sections). Do not omit any file. Do not truncate. Do not include status letters.
 2. Line 2 must be: git commit -m "[TYPE] Message" with TYPE one of: FEAT, FIX, DOCS, REFACTOR, TEST, CHORE.
-3. The message must be a short, specific summary of what the change does based on the file names (e.g. "Add README and feature status doc", "Fix Gemini model and add file-list mode"). Never use only generic words like "update", "changes", or "refactor" by themselves—always add what was updated (e.g. "Update docs and CLI prompt").
+3. The message must describe **what the change does** (behavior, feature, fix)—not a comma-separated list of folders or path segments. You may mention one path if it disambiguates, but the subject must state substance (e.g. "Document FEATURES and tighten Gemini prompt for commit suggestions" not "update gemini, readme, features"). Never use only generic words like "update", "changes", or "refactor" by themselves.
 4. Infer concrete artifacts from paths when obvious: Dockerfiles, Docker Compose files, nginx configs, .env/.env.example templates, CI workflows—not vague summaries like "add changes" or "add files" with no subject. For test paths (e.g. tests/test_foo.py), name the area under test (e.g. "Expand tests for foo and bar")—not "update project files".
 5. Use [FIX] (or "fix:" with --with-diff) when the change corrects broken behavior, wrong CLI flow, or misleading errors—not [REFACTOR] for those cases.
-6. Use imperative, no period at end. Maximum one short line.
+6. Use imperative mood, no period at end. The subject may be up to about 200 characters when needed—finish the thought completely (no cut-off mid-phrase).
 
 Example for files README.md, FEATURES.md, git_explain/gemini.py:
 git add README.md FEATURES.md git_explain/gemini.py
@@ -48,14 +48,15 @@ SYSTEM_PROMPT_WITH_DIFF = """You are given:
 1. A list of changed/added files (## Staged, ## Unstaged, ## Untracked) with <STATUS> <PATH>.
 2. The full diff (## Staged diff, ## Unstaged diff, ## Untracked) showing exact code changes.
 
-Use the diff to write a specific, detailed commit message. Do not use generic words like "update" or "changes"—describe what actually changed (e.g. "add opt-in --with-diff to send full diff to LLM for detailed messages", "tweak commit message edit flow to show suggestion before prompting to edit").
-Name concrete pieces from paths when helpful (Docker, nginx, env templates, workflows)—avoid empty phrases like "add changes" that do not say what was added.
+Use the diff to write a **specific, detailed** commit message about **what changed in behavior, UI, data flow, or APIs**. Quote or paraphrase the actual diff: new props, renamed state, conditional logic, extracted components, bug fixes, etc.
+**Do not** summarize by only listing directories, modules, or file names (e.g. forbidden: "update layout, issues, workspace-views"). If many files move together, state the **theme** of the change in plain language (e.g. "align filter panels and toolbar actions across issue list and workspace views").
+Avoid hollow words like "update" or "changes" without saying what moved or why. Naming Docker, nginx, env templates, or workflows is fine when the diff is about those.
 Prefer **fix:** when the diff corrects incorrect behavior or user-visible bugs; use **refactor:** only for internal restructuring without behavior change.
 
 Output format (conventional commits style):
 - Line 1: git add <path1> <path2> ... with EVERY path from the file list. Do not omit any.
 - Line 2: git commit -m "type: subject" where type is exactly one of: feat, fix, docs, refactor, test, chore.
-  The subject must be a short, specific summary in imperative mood, no period at end (e.g. "feat: allow editing commit message before apply", "fix: parse conventional commit line from AI").
+  Subject: imperative mood, no period at end. Use **up to about 200 characters** when the diff needs it—**complete the sentence**; never stop mid-word or mid-parenthetical.
 
 Example:
 git add git_explain/cli.py git_explain/gemini.py
@@ -73,6 +74,26 @@ COMMIT_LINE_CONVENTIONAL_RE = re.compile(
     re.IGNORECASE,
 )
 DEFAULT_MODEL = "gemini-2.5-flash"
+
+# Single-line subject for `git commit -m` (no body); allow longer than classic 72 when users want detail.
+MAX_COMMIT_SUBJECT_CHARS = 200
+
+
+def truncate_commit_subject(message: str, max_len: int = MAX_COMMIT_SUBJECT_CHARS) -> str:
+    """Trim subject for one-line -m; avoid cutting off mid-parenthetical e.g. '(+2 mo'."""
+    msg = (message or "").strip().rstrip(".")
+    if len(msg) <= max_len:
+        return msg
+    cut = msg[:max_len]
+    # Drop dangling "(+N …" from path-bucket fallbacks when truncation bites
+    if "(+" in cut:
+        idx = cut.rfind("(+")
+        if idx > 0 and not cut[idx:].rstrip().endswith(")"):
+            cut = cut[:idx].rstrip(" ,;")
+    if " " in cut:
+        cut = cut[: cut.rfind(" ")].rstrip(" ,;")
+    return cut
+
 
 _VAGUE_VERB_NOUN = re.compile(
     r"^(add|update|modify|make)\s+(changes?|updates?|stuff|things)\s*$",
@@ -304,9 +325,12 @@ def _fallback_type_and_message_with_context(
         topics.append("docs")
     code_topics = _code_topics(files)
     if code_topics:
-        label = ", ".join(code_topics[:4])
-        if len(code_topics) > 4:
-            label += f" (+{len(code_topics) - 4} more)"
+        if len(code_topics) <= 3:
+            label = ", ".join(code_topics)
+        else:
+            head = ", ".join(code_topics[:3])
+            rest = len(code_topics) - 3
+            label = f"{head} and {rest} related areas"
         topics.append(label)
     if touches_packaging:
         topics.append("packaging config")
@@ -342,9 +366,7 @@ def _fallback_type_and_message_with_context(
         if fb:
             msg = f"{verb} {fb}"
 
-    msg = msg.strip().rstrip(".")
-    if len(msg) > 72:
-        msg = msg[:72].rstrip()
+    msg = truncate_commit_subject(msg)
     return commit_type, msg
 
 
@@ -417,7 +439,7 @@ def suggest_commands(
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0.2,
-                    max_output_tokens=512 if with_diff else 256,
+                    max_output_tokens=1536 if with_diff else 512,
                 ),
             )
             break

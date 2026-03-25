@@ -6,7 +6,7 @@ import os
 import re
 
 from git_explain.commit_infer import refine_type_and_message_from_diff
-from git_explain.gemini import Suggestion
+from git_explain.gemini import MAX_COMMIT_SUBJECT_CHARS, Suggestion, truncate_commit_subject
 from git_explain.path_topics import (
     area_scope_suffix,
     basename_fallback_topic,
@@ -151,9 +151,12 @@ def suggest_from_changes(
         topics.append("config")
     code_topics = _code_topics(paths)
     if code_topics:
-        label = ", ".join(code_topics[:4])
-        if len(code_topics) > 4:
-            label += f" (+{len(code_topics) - 4} more)"
+        if len(code_topics) <= 3:
+            label = ", ".join(code_topics)
+        else:
+            head = ", ".join(code_topics[:3])
+            rest = len(code_topics) - 3
+            label = f"{head} and {rest} related areas"
         topics.append(label)
 
     # Dedupe while preserving order
@@ -181,8 +184,7 @@ def suggest_from_changes(
     if added_any and has_commits is False and message.startswith("Add "):
         message = message.replace("Add ", "Add initial ", 1)
 
-    if len(message) > 72:
-        message = message[:72].rstrip()
+    message = truncate_commit_subject(message, MAX_COMMIT_SUBJECT_CHARS)
 
     commit_type, message = refine_type_and_message_from_diff(
         commit_type, message, diff_text
