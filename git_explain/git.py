@@ -3,18 +3,23 @@
 import subprocess
 from pathlib import Path
 
+# Git emits UTF-8; Windows often defaults subprocess text decoding to a legacy code page
+# (e.g. cp1252), which raises UnicodeDecodeError on non-ASCII paths/diffs. Linux/mac
+# usually use a UTF-8 locale so defaults work, but forcing UTF-8 keeps behavior consistent.
+_GIT_TEXT = {"encoding": "utf-8", "errors": "replace"}
+
 
 def get_repo_root(cwd: str | Path | None = None) -> Path:
     """Return the git repository root. Raises if not in a repo."""
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True,
-        text=True,
         cwd=cwd or ".",
+        **_GIT_TEXT,
     )
     if result.returncode != 0:
         raise RuntimeError("Not a git repository (or any of the parent directories).")
-    return Path(result.stdout.strip())
+    return Path((result.stdout or "").strip())
 
 
 def ensure_git_repo(cwd: str | Path | None = None) -> Path:
@@ -22,10 +27,10 @@ def ensure_git_repo(cwd: str | Path | None = None) -> Path:
     r = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
         capture_output=True,
-        text=True,
         cwd=cwd or ".",
+        **_GIT_TEXT,
     )
-    if r.returncode != 0 or r.stdout.strip().lower() != "true":
+    if r.returncode != 0 or (r.stdout or "").strip().lower() != "true":
         raise RuntimeError("Not a git repository (or any of the parent directories).")
     return get_repo_root(cwd)
 
@@ -36,8 +41,8 @@ def repo_has_commits(cwd: str | Path | None = None) -> bool:
     result = subprocess.run(
         ["git", "rev-parse", "--verify", "HEAD"],
         capture_output=True,
-        text=True,
         cwd=root,
+        **_GIT_TEXT,
     )
     return result.returncode == 0
 
@@ -53,13 +58,14 @@ def _name_status(
     result = subprocess.run(
         ["git"] + args,
         capture_output=True,
-        text=True,
         cwd=root,
+        **_GIT_TEXT,
     )
-    if result.returncode != 0 or not result.stdout.strip():
+    stdout = result.stdout or ""
+    if result.returncode != 0 or not stdout.strip():
         return []
     out: list[tuple[str, str]] = []
-    for raw in result.stdout.splitlines():
+    for raw in stdout.splitlines():
         line = raw.strip()
         if not line:
             continue
@@ -99,12 +105,13 @@ def get_untracked_changes(cwd: str | Path | None = None) -> list[tuple[str, str]
     result = subprocess.run(
         ["git", "ls-files", "--others", "--exclude-standard"],
         capture_output=True,
-        text=True,
         cwd=root,
+        **_GIT_TEXT,
     )
-    if result.returncode != 0 or not result.stdout.strip():
+    out = (result.stdout or "").strip()
+    if result.returncode != 0 or not out:
         return []
-    paths = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
+    paths = [p.strip() for p in out.splitlines() if p.strip()]
     return [("A", p) for p in paths]
 
 
@@ -142,20 +149,22 @@ def get_diff_for_paths(paths: list[str], cwd: str | Path | None = None) -> str:
     result = subprocess.run(
         ["git", "diff", "--cached", "--"] + paths,
         capture_output=True,
-        text=True,
         cwd=root,
+        **_GIT_TEXT,
     )
-    if result.returncode == 0 and result.stdout.strip():
-        parts.append("## Staged diff\n" + result.stdout.strip())
+    staged_out = (result.stdout or "").strip()
+    if result.returncode == 0 and staged_out:
+        parts.append("## Staged diff\n" + staged_out)
 
     result = subprocess.run(
         ["git", "diff", "--"] + paths,
         capture_output=True,
-        text=True,
         cwd=root,
+        **_GIT_TEXT,
     )
-    if result.returncode == 0 and result.stdout.strip():
-        parts.append("## Unstaged diff\n" + result.stdout.strip())
+    unstaged_out = (result.stdout or "").strip()
+    if result.returncode == 0 and unstaged_out:
+        parts.append("## Unstaged diff\n" + unstaged_out)
 
     untracked = get_untracked_changes(cwd=root)
     untracked_set = {p for _, p in untracked}
@@ -178,9 +187,10 @@ def get_staged_diff_for_paths(paths: list[str], cwd: str | Path | None = None) -
     result = subprocess.run(
         ["git", "diff", "--cached", "--"] + paths,
         capture_output=True,
-        text=True,
         cwd=root,
+        **_GIT_TEXT,
     )
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip()
+    out = (result.stdout or "").strip()
+    if result.returncode == 0 and out:
+        return out
     return ""
