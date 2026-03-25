@@ -3,6 +3,7 @@ from git_explain.gemini import (
     COMMIT_LINE_RE,
     _fallback_type_and_message_with_context,
     _is_generic_message,
+    truncate_commit_subject,
 )
 
 
@@ -115,6 +116,18 @@ def test_fallback_avoids_redundant_scope_suffix() -> None:
     assert "for git_explain" not in low
 
 
+def test_truncate_commit_subject_drops_dangling_plus_more() -> None:
+    """Regression: hard slice used to cut '(+N more)' into '(+N mo'."""
+    long_msg = (
+        "Update layout, module-work-items, project-issues, workspace-views "
+        "and 5 related areas with extra detail for filters"
+    )
+    # Force a cut that would bisect a synthetic (+N more) tail
+    cut = truncate_commit_subject(long_msg + " (+7 more)", max_len=72)
+    assert not cut.endswith("mo")
+    assert "(+" not in cut or cut.rstrip().endswith(")")
+
+
 def test_fallback_prefers_stems_when_folder_is_same() -> None:
     _ctype, msg = _fallback_type_and_message_with_context(
         files=[
@@ -128,3 +141,14 @@ def test_fallback_prefers_stems_when_folder_is_same() -> None:
     low = msg.lower()
     assert "update git explain" not in low
     assert "cli" in low or "gemini" in low or "git" in low
+
+
+def test_fallback_many_folders_uses_related_areas_not_plus_more() -> None:
+    folders = [f"ui/src/area{i}/File.tsx" for i in range(8)]
+    _ctype, msg = _fallback_type_and_message_with_context(
+        files=folders,
+        added_any=False,
+        has_commits=True,
+    )
+    assert "(+" not in msg
+    assert "related areas" in msg.lower()
