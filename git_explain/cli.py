@@ -1,5 +1,6 @@
 """CLI for git-explain: suggest and optionally apply commit message from diffs."""
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +19,7 @@ from git_explain.git import (
     get_diff_for_paths,
     get_staged_diff_for_paths,
 )
-from git_explain.run import apply_commands
+from git_explain.run import apply_commands, normalize_commit_subject_for_dash_m
 
 load_dotenv()
 app = typer.Typer()
@@ -55,9 +56,8 @@ def _parse_combined(combined: str) -> tuple[bool | None, list[Change]]:
             if v in ("true", "false"):
                 has_commits = v == "true"
             continue
-        m = __import__("re").match(
-            r"^([AMDRC])\s+(.+)$", line, __import__("re").IGNORECASE
-        )
+        # A/M/D/R/C: add/modify/delete/rename/copy; T: type change; U: unmerged (git name-status)
+        m = re.match(r"^([AMDRCUT])\s+(.+)$", line, re.IGNORECASE)
         if not m:
             continue
         status = m.group(1).upper()
@@ -343,9 +343,10 @@ def run(
             )
             raise typer.Exit(1)
 
+        cmsg = normalize_commit_subject_for_dash_m(sug.commit_message)
         console.print(
             Panel(
-                f'git commit -m "[{sug.commit_type}] {sug.commit_message}"',
+                f'git commit -m "[{sug.commit_type}] {cmsg}"',
                 title="Suggested commit command",
                 border_style="green",
             )
@@ -533,7 +534,8 @@ def run(
         rendered: list[str] = []
         for name, paths, ctype, cmsg in pl:
             add_line = "git add -A -- " + " ".join(_ps_quote(p) for p in paths)
-            commit_line = f'git commit -m "[{ctype}] {cmsg}"'
+            subj = normalize_commit_subject_for_dash_m(cmsg)
+            commit_line = f'git commit -m "[{ctype}] {subj}"'
             rendered.append(f"### {name}\n{add_line}\n{commit_line}")
         return "\n\n".join(rendered)
 

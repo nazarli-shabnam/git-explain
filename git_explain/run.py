@@ -7,6 +7,14 @@ from pathlib import Path
 _GIT_TEXT = {"encoding": "utf-8", "errors": "replace"}
 
 
+def normalize_commit_subject_for_dash_m(message: str | None) -> str:
+    """Single line for ``git commit -m``: newlines/tabs become spaces, strip ends.
+
+    Multi-line text breaks one-line -m and looks wrong when copied into a shell.
+    """
+    return " ".join((message or "").replace("\t", " ").splitlines()).strip()
+
+
 def _has_staged_changes(repo_root: Path) -> bool:
     # Works even for initial commit (unborn HEAD).
     r = subprocess.run(
@@ -58,7 +66,8 @@ def apply_commands(
                 "not run git add; stage your changes first, then try again."
             )
         raise RuntimeError("Nothing staged after git add; aborting commit.")
-    full_message = f"[{commit_type}] {commit_message}"
+    safe_msg = normalize_commit_subject_for_dash_m(commit_message)
+    full_message = f"[{commit_type}] {safe_msg}"
     subprocess.run(
         ["git", "commit", "-m", full_message],
         check=True,

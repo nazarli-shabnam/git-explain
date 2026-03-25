@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "git-explain"
-version = "v2.1.8"
 description = "CLI that suggests git add/commit from diffs using Gemini"
 readme = "README.md"
 requires-python = ">=3.10"
+dynamic = ["version"]
 license = "MIT"
 authors = [
   { name = "git-explain contributors" },
@@ -45,3 +45,6 @@ git-explain = "git_explain.cli:app"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["git_explain*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "git_explain.__version__" }

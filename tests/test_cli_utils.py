@@ -74,6 +74,16 @@ def test_parse_combined_same_path_multiple_sections() -> None:
     assert "Unstaged" in changes[0].sections
 
 
+def test_parse_combined_git_typechange_and_unmerged() -> None:
+    """git diff --name-status can emit T (type change) and U (unmerged)."""
+    combined = "## Staged\nT switch.sh\nU conflict.txt"
+    _hc, changes = _parse_combined(combined)
+    assert {(c.status, c.path) for c in changes} == {
+        ("T", "switch.sh"),
+        ("U", "conflict.txt"),
+    }
+
+
 def test_ps_quote() -> None:
     assert _ps_quote("simple") == "'simple'"
     assert _ps_quote("path with spaces") == "'path with spaces'"
