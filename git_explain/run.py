@@ -7,6 +7,32 @@ from pathlib import Path
 _GIT_TEXT = {"encoding": "utf-8", "errors": "replace"}
 
 
+def _lowercase_first(s: str) -> str:
+    """Lowercase the first character unless the first word is an acronym."""
+    if not s:
+        return s
+    first_space = s.find(" ")
+    first_word = s[:first_space] if first_space > 0 else s
+    if first_word == first_word.upper() and len(first_word) > 1:
+        return s
+    return s[0].lower() + s[1:]
+
+
+def format_commit_message(
+    commit_type: str,
+    commit_message: str,
+    *,
+    scope: str | None = None,
+    breaking: bool = False,
+) -> str:
+    """Format a conventional commit subject: type(scope)!: description."""
+    type_str = commit_type.lower()
+    scope_str = f"({scope})" if scope else ""
+    bang = "!" if breaking else ""
+    msg = _lowercase_first(commit_message)
+    return f"{type_str}{scope_str}{bang}: {msg}"
+
+
 def normalize_commit_subject_for_dash_m(message: str | None) -> str:
     """Single line for ``git commit -m``: newlines/tabs become spaces, strip ends.
 
@@ -39,6 +65,9 @@ def apply_commands(
     commit_type: str,
     commit_message: str,
     *,
+    scope: str | None = None,
+    body: str | None = None,
+    breaking: bool = False,
     staged_only: bool = False,
 ) -> None:
     """Stage selected paths and commit. Raises on failure.
@@ -67,9 +96,15 @@ def apply_commands(
             )
         raise RuntimeError("Nothing staged after git add; aborting commit.")
     safe_msg = normalize_commit_subject_for_dash_m(commit_message)
-    full_message = f"[{commit_type}] {safe_msg}"
+    full_message = format_commit_message(
+        commit_type, safe_msg, scope=scope, breaking=breaking
+    )
+    cmd = ["git", "commit", "-m", full_message]
+    if body:
+        safe_body = normalize_commit_subject_for_dash_m(body)
+        cmd.extend(["-m", safe_body])
     subprocess.run(
-        ["git", "commit", "-m", full_message],
+        cmd,
         check=True,
         cwd=root,
         capture_output=True,
