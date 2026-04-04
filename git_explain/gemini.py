@@ -36,7 +36,7 @@ VALID_TYPES = frozenset(
 
 _TYPE_RE_ALT = "|".join(sorted(VALID_TYPES | {"TESTS"}, key=len, reverse=True))
 
-SYSTEM_PROMPT = f"""You are given a list of changed/added files under ## Staged, ## Unstaged, ## Untracked.
+SYSTEM_PROMPT = """You are given a list of changed/added files under ## Staged, ## Unstaged, ## Untracked.
 Each file line is: <STATUS> <PATH> where STATUS is one of:
 - A = added/new file
 - M = modified
@@ -67,7 +67,7 @@ git add api/Dockerfile api/nginx.conf
 git commit -m "build(api): add Docker and nginx configuration"
 """
 
-SYSTEM_PROMPT_WITH_DIFF = f"""You are given:
+SYSTEM_PROMPT_WITH_DIFF = """You are given:
 1. A list of changed/added files (## Staged, ## Unstaged, ## Untracked) with <STATUS> <PATH>.
 2. The full diff (## Diff) showing exact code changes.
 
@@ -118,6 +118,7 @@ def _normalize_type(t: str) -> str:
     if upper == "TESTS":
         return "TEST"
     return upper if upper in VALID_TYPES else "CHORE"
+
 
 # Single-line subject for `git commit -m` (no body); allow longer than classic 72 when users want detail.
 MAX_COMMIT_SUBJECT_CHARS = 200
@@ -363,7 +364,11 @@ def _fallback_type_and_message_with_context(
         hints = test_subject_hints(files)
         if all_tests_only and hints:
             if len(hints) <= 4:
-                head = ", ".join(hints[:-1]) + " and " + hints[-1] if len(hints) > 1 else hints[0]
+                head = (
+                    ", ".join(hints[:-1]) + " and " + hints[-1]
+                    if len(hints) > 1
+                    else hints[0]
+                )
             else:
                 head = ", ".join(hints[:4])
             topics.append(f"tests for {head}")

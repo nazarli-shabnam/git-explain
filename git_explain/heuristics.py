@@ -158,7 +158,11 @@ def suggest_from_changes(
         hints = test_subject_hints(paths)
         if all_tests_only and hints:
             if len(hints) <= 4:
-                head = ", ".join(hints[:-1]) + " and " + hints[-1] if len(hints) > 1 else hints[0]
+                head = (
+                    ", ".join(hints[:-1]) + " and " + hints[-1]
+                    if len(hints) > 1
+                    else hints[0]
+                )
             else:
                 head = ", ".join(hints[:4])
             topics.append(f"tests for {head}")
