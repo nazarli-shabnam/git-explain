@@ -72,8 +72,8 @@ def test_test_only_paths_get_specific_test_message() -> None:
     assert "project files" not in m
 
 
-def test_docker_nginx_env_paths_get_specific_chore_message() -> None:
-    """Infra paths should not collapse to 'Add changes'."""
+def test_docker_nginx_env_paths_get_specific_build_message() -> None:
+    """Infra paths should not collapse to 'add changes'."""
     s = suggest_from_changes(
         changes=[
             ("A", "api/app/.env.example"),
@@ -85,7 +85,7 @@ def test_docker_nginx_env_paths_get_specific_chore_message() -> None:
         ],
         has_commits=True,
     )
-    assert s.commit_type == "CHORE"
+    assert s.commit_type == "BUILD"
     m = s.commit_message.lower()
     assert "docker" in m
     assert "nginx" in m
