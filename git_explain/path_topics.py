@@ -158,6 +158,86 @@ def area_scope_suffix(paths: list[str]) -> str:
     return f" for {labels[0]}, {labels[1]}, and {labels[2]}"
 
 
+_CI_FILES = {
+    ".gitlab-ci.yml",
+    ".travis.yml",
+    "azure-pipelines.yml",
+    "jenkinsfile",
+    "bitbucket-pipelines.yml",
+}
+
+
+def is_ci_path(path: str) -> bool:
+    """True if path looks like a CI/CD configuration file."""
+    p = _norm(path).lower()
+    base = os.path.basename(p)
+    if ".github/workflows/" in p or ".github/actions/" in p:
+        return True
+    if base in _CI_FILES:
+        return True
+    if ".circleci/" in p:
+        return True
+    return False
+
+
+_BUILD_FILES = {
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "makefile",
+    "gnumakefile",
+    "package.json",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "cargo.toml",
+    "cargo.lock",
+    "go.mod",
+    "go.sum",
+    "gemfile",
+    "gemfile.lock",
+    "build.gradle",
+    "pom.xml",
+}
+
+
+def is_build_path(path: str) -> bool:
+    """True if path is a build system, packaging, or containerization file."""
+    p = _norm(path).lower()
+    base = os.path.basename(p)
+    if base in _BUILD_FILES:
+        return True
+    return is_infra_deploy_path(path)
+
+
+def infer_scope(paths: list[str]) -> str | None:
+    """Infer a conventional commits scope from file paths.
+
+    Returns a single scope when all non-root files share one top-level
+    directory, otherwise None.
+    """
+    if not paths:
+        return None
+
+    candidates: set[str] = set()
+    for raw in paths:
+        p = _norm(raw).lower()
+        parts = [x for x in p.split("/") if x]
+        if len(parts) < 2:
+            continue
+        first = parts[0]
+        if first in ("apps", "packages", "services") and len(parts) >= 3:
+            candidates.add(parts[1])
+        else:
+            candidates.add(first)
+
+    if len(candidates) == 1:
+        return candidates.pop().replace("_", "-")
+    return None
+
+
 def basename_fallback_topic(paths: list[str], max_names: int = 4) -> str | None:
     """Short description from basenames when no other topic matched."""
     bases: list[str] = []

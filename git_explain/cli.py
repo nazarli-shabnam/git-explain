@@ -2,7 +2,7 @@
 
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -12,14 +12,18 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from git_explain.gemini import suggest_commands
+from git_explain.gemini import Suggestion, suggest_commands
 from git_explain.heuristics import suggest_from_changes
 from git_explain.git import (
     get_combined_diff,
     get_diff_for_paths,
     get_staged_diff_for_paths,
 )
-from git_explain.run import apply_commands, normalize_commit_subject_for_dash_m
+from git_explain.run import (
+    apply_commands,
+    format_commit_message,
+    normalize_commit_subject_for_dash_m,
+)
 
 load_dotenv()
 app = typer.Typer()
@@ -344,13 +348,10 @@ def run(
             raise typer.Exit(1)
 
         cmsg = normalize_commit_subject_for_dash_m(sug.commit_message)
-        console.print(
-            Panel(
-                f'git commit -m "[{sug.commit_type}] {cmsg}"',
-                title="Suggested commit command",
-                border_style="green",
-            )
+        full = format_commit_message(
+            sug.commit_type, cmsg, scope=sug.scope, breaking=sug.breaking
         )
+        print(f'git commit -m "{full}"')
         return
 
     if staged_only:
@@ -422,9 +423,8 @@ def run(
 
     def suggest_for(
         change_items: list[tuple[str, str]], title: str
-    ) -> tuple[list[str], str, str, str, str | None]:
-        # Returns (paths, type, message, raw_text, ai_fallback_reason).
-        # ai_fallback_reason is set when --ai was used but heuristics were used instead.
+    ) -> tuple[Suggestion, str | None]:
+        """Return (suggestion, ai_fallback_reason)."""
         paths_for_infer = [p for _, p in change_items]
         infer_diff: str | None = None
         if paths_for_infer:
@@ -444,7 +444,7 @@ def run(
                 if diff_text:
                     payload = payload + "\n\n## Diff\n" + diff_text
             try:
-                sug, raw = suggest_commands(
+                sug, _raw = suggest_commands(
                     payload,
                     model=model,
                     with_diff=with_diff,
@@ -452,27 +452,20 @@ def run(
                 )
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
-                return sug.add_args, sug.commit_type, sug.commit_message, raw, None
+                return sug, None
             except Exception as e:
-                # Fall back to heuristics on quota / API errors
                 h = suggest_from_changes(
                     changes=change_items,
                     has_commits=has_commits,
                     diff_text=infer_diff,
                 )
-                return (
-                    h.add_args,
-                    h.commit_type,
-                    h.commit_message,
-                    "",
-                    str(e),
-                )
+                return h, str(e)
         h = suggest_from_changes(
             changes=change_items,
             has_commits=has_commits,
             diff_text=infer_diff,
         )
-        return h.add_args, h.commit_type, h.commit_message, "", None
+        return h, None
 
     selected_pairs = [(ch.status, ch.path) for ch in selected]
     unique_paths = {p for _, p in selected_pairs}
@@ -492,18 +485,18 @@ def run(
             if mode_input in ("one", "split"):
                 mode = mode_input
 
-    plan: list[tuple[str, list[str], str, str]] = []
+    plan: list[tuple[str, Suggestion]] = []
     ai_fallback_notes: list[tuple[str, str]] = []
     if mode == "split":
         groups = _group_changes(selected_pairs)
         for gname, items in groups.items():
-            paths, ctype, cmsg, _raw, fb = suggest_for(items, title=gname.capitalize())
-            plan.append((gname, paths, ctype, cmsg))
+            sug, fb = suggest_for(items, title=gname.capitalize())
+            plan.append((gname, sug))
             if fb:
                 ai_fallback_notes.append((gname, fb))
     else:
-        paths, ctype, cmsg, _raw, fb = suggest_for(selected_pairs, title="Selected")
-        plan.append(("one", paths, ctype, cmsg))
+        sug, fb = suggest_for(selected_pairs, title="Selected")
+        plan.append(("one", sug))
         if fb:
             ai_fallback_notes.append(("", fb))
 
@@ -530,12 +523,15 @@ def run(
             )
         )
 
-    def _render_plan(pl: list[tuple[str, list[str], str, str]]) -> str:
+    def _render_plan(pl: list[tuple[str, Suggestion]]) -> str:
         rendered: list[str] = []
-        for name, paths, ctype, cmsg in pl:
-            add_line = "git add -A -- " + " ".join(_ps_quote(p) for p in paths)
-            subj = normalize_commit_subject_for_dash_m(cmsg)
-            commit_line = f'git commit -m "[{ctype}] {subj}"'
+        for name, sug in pl:
+            add_line = "git add -A -- " + " ".join(_ps_quote(p) for p in sug.add_args)
+            subj = normalize_commit_subject_for_dash_m(sug.commit_message)
+            full = format_commit_message(
+                sug.commit_type, subj, scope=sug.scope, breaking=sug.breaking
+            )
+            commit_line = f'git commit -m "{full}"'
             rendered.append(f"### {name}\n{add_line}\n{commit_line}")
         return "\n\n".join(rendered)
 
@@ -557,29 +553,35 @@ def run(
             .lower()
         )
         if edit_choice in ("y", "yes"):
-            updated: list[tuple[str, list[str], str, str]] = []
-            for name, paths, ctype, cmsg in plan:
+            updated: list[tuple[str, Suggestion]] = []
+            for name, sug in plan:
+                current = format_commit_message(
+                    sug.commit_type,
+                    sug.commit_message,
+                    scope=sug.scope,
+                    breaking=sug.breaking,
+                )
                 console.print(
-                    f"[dim]{name}:[/dim] current message: [bold][{ctype}] {cmsg}[/bold]"
+                    f"[dim]{name}:[/dim] current message: [bold]{current}[/bold]"
                 )
                 try:
                     from prompt_toolkit import prompt as pt_prompt
 
                     new_msg = (
                         pt_prompt(
-                            "New commit message (subject only, no [TYPE] prefix): ",
-                            default=cmsg,
+                            "New commit message (subject only, type/scope added automatically): ",
+                            default=sug.commit_message,
                         ).strip()
-                        or cmsg
+                        or sug.commit_message
                     )
                 except Exception:
                     new_msg = (
                         typer.prompt(
-                            "New commit message (subject only, no [TYPE] prefix)",
-                            default=cmsg,
+                            "New commit message (subject only, type/scope added automatically)",
+                            default=sug.commit_message,
                         ).strip()
-                    ) or cmsg
-                updated.append((name, paths, ctype, new_msg))
+                    ) or sug.commit_message
+                updated.append((name, replace(sug, commit_message=new_msg)))
             plan = updated
             console.print(
                 Panel(
@@ -601,13 +603,16 @@ def run(
         do_apply = choice == "auto" or choice in ("y", "yes")
 
     if do_apply:
-        for name, paths, ctype, cmsg in plan:
+        for name, sug in plan:
             try:
                 apply_commands(
                     repo_root,
-                    [] if staged_only else paths,
-                    ctype,
-                    cmsg,
+                    [] if staged_only else sug.add_args,
+                    sug.commit_type,
+                    sug.commit_message,
+                    scope=sug.scope,
+                    body=sug.body,
+                    breaking=sug.breaking,
                     staged_only=staged_only,
                 )
                 console.print(f"[green]Commit created ({name}).[/green]")
