@@ -20,6 +20,14 @@ pip install git-explain
 pip install -e .
 ```
 
+**Clone:** install deps (`requirements.txt` is fine), `cd` into the repo, then:
+
+```bash
+python -m git_explain
+```
+
+Run that from the repo root so Python picks up the `git_explain` folder—no `pip install -e .` needed.
+
 Optional: install a specific tag from GitHub instead of PyPI:
 
 ```bash
@@ -39,6 +47,8 @@ pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v2.1.8"
 
 Heuristics guess a sensible type and message from paths and statuses. **No account, no key, no network** for that path.
 
+Suggested commits follow **[Conventional Commits](https://www.conventionalcommits.org/)**—`feat: …`, `fix: …`, optional `(scope)`, and so on—so changelogs and release tools can read them.
+
 ---
 
 ## Optional: Gemini
@@ -49,7 +59,7 @@ If you want sharper messages, set **`GEMINI_API_KEY`** (or `GOOGLE_API_KEY`) in 
 |--------|----------------|
 | `git-explain --ai` | AI sees **paths and change type** only (no file contents). |
 | `git-explain --ai --with-diff` | AI also sees the **diff**—better detail; only use if you’re OK sending that to the API. |
-| `git-explain --suggest` | **Staged files only**; prints one **`git commit -m "..."`** line for scripting. Needs AI; don’t combine with other flags. |
+| `git-explain --suggest` | **Staged only**; prints one plain `git commit -m "…"` line (easy to copy). Needs AI; don’t combine with other flags. |
 
 Everything else (`--auto`, `--staged-only`, `--cwd`, model override, shell completion): **`git-explain --help`**.
 

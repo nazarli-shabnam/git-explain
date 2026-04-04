@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dynamic = ["version"]
 license = "MIT"
 authors = [
-  { name = "git-explain contributors" },
+  { name = "nazarli-shabnam" },
 ]
 keywords = ["git", "cli", "commit", "ai", "gemini"]
 classifiers = [
