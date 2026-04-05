@@ -12,10 +12,29 @@ from git_explain.commit_infer import refine_type_and_message_from_diff
 from git_explain.path_topics import (
     area_scope_suffix,
     basename_fallback_topic,
+    infer_scope,
     infra_deploy_topics,
     is_test_path,
     test_subject_hints,
 )
+
+VALID_TYPES = frozenset(
+    {
+        "FEAT",
+        "FIX",
+        "DOCS",
+        "REFACTOR",
+        "TEST",
+        "CHORE",
+        "BUILD",
+        "CI",
+        "STYLE",
+        "PERF",
+        "REVERT",
+    }
+)
+
+_TYPE_RE_ALT = "|".join(sorted(VALID_TYPES | {"TESTS"}, key=len, reverse=True))
 
 SYSTEM_PROMPT = """You are given a list of changed/added files under ## Staged, ## Unstaged, ## Untracked.
 Each file line is: <STATUS> <PATH> where STATUS is one of:
@@ -25,55 +44,81 @@ Each file line is: <STATUS> <PATH> where STATUS is one of:
 - R = renamed
 - C = copied
 
-Suggest one commit that includes ALL of these files.
+Suggest one commit that includes ALL of these files using Conventional Commits format.
 
 Rules:
 1. Line 1 must be: git add <path1> <path2> ... with EVERY PATH from the list (all sections). Do not omit any file. Do not truncate. Do not include status letters.
-2. Line 2 must be: git commit -m "[TYPE] Message" with TYPE one of: FEAT, FIX, DOCS, REFACTOR, TEST, CHORE.
-3. The message must describe **what the change does** (behavior, feature, fix)—not a comma-separated list of folders or path segments. You may mention one path if it disambiguates, but the subject must state substance (e.g. "Document FEATURES and tighten Gemini prompt for commit suggestions" not "update gemini, readme, features"). Never use only generic words like "update", "changes", or "refactor" by themselves.
-4. Infer concrete artifacts from paths when obvious: Dockerfiles, Docker Compose files, nginx configs, .env/.env.example templates, CI workflows—not vague summaries like "add changes" or "add files" with no subject. For test paths (e.g. tests/test_foo.py), name the area under test (e.g. "Expand tests for foo and bar")—not "update project files".
-5. Use [FIX] (or "fix:" with --with-diff) when the change corrects broken behavior, wrong CLI flow, or misleading errors—not [REFACTOR] for those cases.
-6. Use imperative mood, no period at end. The subject may be up to about 200 characters when needed—finish the thought completely (no cut-off mid-phrase).
+2. Line 2 must be: git commit -m "type(scope): description"
+   - type: exactly one of: feat, fix, docs, refactor, test, chore, build, ci, style, perf
+   - scope (optional): a noun in parentheses describing the area of the codebase (e.g., cli, api, parser). Omit if the change spans many unrelated areas.
+   - If the change introduces a breaking API change, add ! after the type/scope: feat!: or feat(api)!:
+   - description: imperative mood, lowercase first letter, no period at end. Up to about 200 characters—finish the thought completely.
+3. The description must state **what the change does** (behavior, feature, fix)—not a comma-separated list of folders or path segments. You may mention one path if it disambiguates. Never use only generic words like "update", "changes", or "refactor" by themselves.
+4. Infer concrete artifacts from paths when obvious: Dockerfiles, Docker Compose files, nginx configs, .env/.env.example templates, CI workflows—not vague summaries. For test paths (e.g. tests/test_foo.py), name the area under test (e.g. "expand tests for foo and bar").
+5. Use fix when the change corrects broken behavior, wrong CLI flow, or misleading errors—not refactor for those cases.
+6. Use build for build system / dependency changes (Dockerfile, pyproject.toml, requirements.txt, Makefile). Use ci for CI/CD config (.github/workflows, .gitlab-ci.yml, etc.).
 
 Example for files README.md, FEATURES.md, git_explain/gemini.py:
 git add README.md FEATURES.md git_explain/gemini.py
-git commit -m "[DOCS] Add README and FEATURES doc, tune Gemini prompt"
+git commit -m "docs: add README and FEATURES doc, tune Gemini prompt"
 
-Example for Docker + nginx + env templates under api/ and apps/frontend/:
-git add api/app/Dockerfile apps/frontend/nginx.conf
-git commit -m "[CHORE] Add Docker and nginx config with env examples for api and frontend"
+Example for Docker + nginx under api/:
+git add api/Dockerfile api/nginx.conf
+git commit -m "build(api): add Docker and nginx configuration"
 """
 
 SYSTEM_PROMPT_WITH_DIFF = """You are given:
 1. A list of changed/added files (## Staged, ## Unstaged, ## Untracked) with <STATUS> <PATH>.
-2. The full diff (## Staged diff, ## Unstaged diff, ## Untracked) showing exact code changes.
+2. The full diff (## Diff) showing exact code changes.
 
-Use the diff to write a **specific, detailed** commit message about **what changed in behavior, UI, data flow, or APIs**. Quote or paraphrase the actual diff: new props, renamed state, conditional logic, extracted components, bug fixes, etc.
-**Do not** summarize by only listing directories, modules, or file names (e.g. forbidden: "update layout, issues, workspace-views"). If many files move together, state the **theme** of the change in plain language (e.g. "align filter panels and toolbar actions across issue list and workspace views").
-Avoid hollow words like "update" or "changes" without saying what moved or why. Naming Docker, nginx, env templates, or workflows is fine when the diff is about those.
-Prefer **fix:** when the diff corrects incorrect behavior or user-visible bugs; use **refactor:** only for internal restructuring without behavior change.
+Use the diff to write a **specific, detailed** commit message in Conventional Commits format about **what changed in behavior, UI, data flow, or APIs**. Quote or paraphrase the actual diff: new props, renamed state, conditional logic, extracted components, bug fixes, etc.
+**Do not** summarize by only listing directories, modules, or file names. If many files move together, state the **theme** of the change in plain language.
+Avoid hollow words like "update" or "changes" without saying what moved or why.
+Prefer fix when the diff corrects incorrect behavior or user-visible bugs; use refactor only for internal restructuring without behavior change.
+Use build for build/dependency changes, ci for CI/CD config changes.
 
-Output format (conventional commits style):
+Output format:
 - Line 1: git add <path1> <path2> ... with EVERY path from the file list. Do not omit any.
-- Line 2: git commit -m "type: subject" where type is exactly one of: feat, fix, docs, refactor, test, chore.
-  Subject: imperative mood, no period at end. Use **up to about 200 characters** when the diff needs it—**complete the sentence**; never stop mid-word or mid-parenthetical.
+- Line 2: git commit -m "type(scope): description"
+  - type: exactly one of: feat, fix, docs, refactor, test, chore, build, ci, style, perf
+  - scope (optional): noun in parentheses describing the area. Omit if change spans many areas.
+  - If breaking change, add ! after type/scope: feat!: or feat(api)!:
+  - description: imperative mood, lowercase first letter, no period at end. Up to 200 characters—complete the sentence, never cut mid-word.
 
 Example:
 git add git_explain/cli.py git_explain/gemini.py
-git commit -m "feat: add opt-in --with-diff for detailed AI commit messages"
+git commit -m "feat(cli): add opt-in --with-diff for detailed AI commit messages"
 """
 
 ADD_LINE_RE = re.compile(r"git\s+add\s+(.+)", re.IGNORECASE)
+
 COMMIT_LINE_RE = re.compile(
-    r'git\s+commit\s+-m\s+["\']\[(FEAT|FIX|DOCS|REFACTOR|TESTS|CHORE)\]\s*(.+?)["\']',
+    r"git\s+commit\s+-m\s+[\"']"
+    rf"({_TYPE_RE_ALT})"
+    r"(?:\(([^)]*)\))?"
+    r"(!?)"
+    r"\s*:\s*(.+?)"
+    r"[\"']",
     re.IGNORECASE,
 )
-# Conventional: "feat: subject" or "fix: subject" (use "tests" not "test")
-COMMIT_LINE_CONVENTIONAL_RE = re.compile(
-    r'git\s+commit\s+-m\s+["\'](feat|fix|docs|refactor|tests|chore)\s*:\s*(.+?)["\']',
+
+_COMMIT_LINE_BRACKET_RE = re.compile(
+    r"git\s+commit\s+-m\s+[\"']"
+    rf"\[({_TYPE_RE_ALT})\]"
+    r"\s*(.+?)"
+    r"[\"']",
     re.IGNORECASE,
 )
+
 DEFAULT_MODEL = "gemini-2.5-flash"
+
+
+def _normalize_type(t: str) -> str:
+    upper = (t or "").upper()
+    if upper == "TESTS":
+        return "TEST"
+    return upper if upper in VALID_TYPES else "CHORE"
+
 
 # Single-line subject for `git commit -m` (no body); allow longer than classic 72 when users want detail.
 MAX_COMMIT_SUBJECT_CHARS = 200
@@ -318,22 +363,22 @@ def _fallback_type_and_message_with_context(
         all_tests_only = len(test_files) == len(files)
         hints = test_subject_hints(files)
         if all_tests_only and hints:
-            head = " and ".join(hints[:3])
-            tail = f" (+{len(hints) - 3} more)" if len(hints) > 3 else ""
-            topics.append(f"tests for {head}{tail}")
+            if len(hints) <= 4:
+                head = (
+                    ", ".join(hints[:-1]) + " and " + hints[-1]
+                    if len(hints) > 1
+                    else hints[0]
+                )
+            else:
+                head = ", ".join(hints[:4])
+            topics.append(f"tests for {head}")
         else:
             topics.append("tests")
     if touches_docs and not docs_only:
         topics.append("docs")
     code_topics = _code_topics(files)
     if code_topics:
-        if len(code_topics) <= 3:
-            label = ", ".join(code_topics)
-        else:
-            head = ", ".join(code_topics[:3])
-            rest = len(code_topics) - 3
-            label = f"{head} and {rest} related areas"
-        topics.append(label)
+        topics.append(", ".join(code_topics[:5]))
     if touches_packaging:
         topics.append("packaging config")
 
@@ -405,6 +450,9 @@ class Suggestion:
     add_args: list[str]
     commit_type: str
     commit_message: str
+    scope: str | None = None
+    body: str | None = None
+    breaking: bool = False
 
 
 def _get_client() -> genai.Client:
@@ -481,20 +529,24 @@ def suggest_commands(
     add_args: list[str] = []
     commit_type = "REFACTOR"
     commit_message = "update"
+    scope: str | None = None
+    breaking = False
     for line in lines:
         add_m = ADD_LINE_RE.match(line)
         if add_m:
             add_args = [f.strip() for f in add_m.group(1).split() if f.strip()]
             continue
-        commit_m = COMMIT_LINE_CONVENTIONAL_RE.match(line) if with_diff else None
-        if commit_m:
-            commit_type = commit_m.group(1).upper()
-            commit_message = commit_m.group(2).strip().rstrip(".")
-            break
         commit_m = COMMIT_LINE_RE.match(line)
         if commit_m:
-            commit_type = commit_m.group(1).upper()
-            commit_message = commit_m.group(2).strip().rstrip(".")
+            commit_type = _normalize_type(commit_m.group(1))
+            scope = commit_m.group(2) or None
+            breaking = commit_m.group(3) == "!"
+            commit_message = commit_m.group(4).strip().rstrip(".")
+            break
+        bracket_m = _COMMIT_LINE_BRACKET_RE.match(line)
+        if bracket_m:
+            commit_type = _normalize_type(bracket_m.group(1))
+            commit_message = bracket_m.group(2).strip().rstrip(".")
             break
     if not add_args or not commit_message:
         return None, raw
@@ -507,11 +559,9 @@ def suggest_commands(
     all_paths = [p for _, p in entries]
     added_any = any(s == "A" for s, _ in entries)
 
-    # Always use the full path list we sent (model may truncate or omit)
     if all_paths:
         add_args = all_paths
 
-    # If we're adding new files (or this is an initial commit), don't label it REFACTOR
     docs_only = all_paths and all(
         os.path.splitext(p)[1].lower() in {".md", ".rst", ".txt"} for p in all_paths
     )
@@ -523,6 +573,9 @@ def suggest_commands(
             files=add_args, added_any=added_any, has_commits=has_commits
         )
 
+    if scope is None:
+        scope = infer_scope(add_args)
+
     infer_body = unified_diff_for_infer
     if not (infer_body and infer_body.strip()) and with_diff and "\n## Diff" in diff:
         infer_body = diff.split("\n## Diff", 1)[1]
@@ -531,5 +584,9 @@ def suggest_commands(
     )
 
     return Suggestion(
-        add_args=add_args, commit_type=commit_type, commit_message=commit_message
+        add_args=add_args,
+        commit_type=commit_type,
+        commit_message=commit_message,
+        scope=scope,
+        breaking=breaking,
     ), raw

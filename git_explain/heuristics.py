@@ -14,7 +14,10 @@ from git_explain.gemini import (
 from git_explain.path_topics import (
     area_scope_suffix,
     basename_fallback_topic,
+    infer_scope,
     infra_deploy_topics,
+    is_build_path,
+    is_ci_path,
     is_infra_deploy_path,
     is_test_path,
     test_subject_hints,
@@ -105,25 +108,33 @@ def suggest_from_changes(
     docs = [p for p in paths if _is_doc(p)]
     tests = [p for p in paths if is_test_path(p)]
     configs = [p for p in paths if _is_config(p)]
+    ci_files = [p for p in paths if is_ci_path(p)]
+    build_files = [p for p in paths if is_build_path(p)]
     has_tests = bool(tests)
     has_configs = bool(configs)
     non_docs = [p for p in paths if p not in docs]
 
     docs_only = bool(paths) and len(docs) == len(paths)
+    ci_only = bool(paths) and len(ci_files) == len(paths)
+    build_only = bool(paths) and len(build_files) == len(paths)
     mostly_tests_or_config = False
     if non_docs:
         tc = len([p for p in non_docs if p in tests or p in configs])
         mostly_tests_or_config = tc / max(1, len(non_docs)) >= 0.6
 
     if has_commits is False:
-        verb = "Add"
+        verb = "add"
     elif added_any and not modified_any:
-        verb = "Add"
+        verb = "add"
     else:
-        verb = "Update"
+        verb = "update"
 
     if docs_only:
         commit_type = "DOCS"
+    elif ci_only:
+        commit_type = "CI"
+    elif build_only:
+        commit_type = "BUILD"
     elif mostly_tests_or_config:
         if has_tests and not has_configs:
             commit_type = "TEST"
@@ -146,22 +157,22 @@ def suggest_from_changes(
         all_tests_only = bool(paths) and len(tests) == len(paths)
         hints = test_subject_hints(paths)
         if all_tests_only and hints:
-            head = " and ".join(hints[:3])
-            tail = f" (+{len(hints) - 3} more)" if len(hints) > 3 else ""
-            topics.append(f"tests for {head}{tail}")
+            if len(hints) <= 4:
+                head = (
+                    ", ".join(hints[:-1]) + " and " + hints[-1]
+                    if len(hints) > 1
+                    else hints[0]
+                )
+            else:
+                head = ", ".join(hints[:4])
+            topics.append(f"tests for {head}")
         else:
             topics.append("tests")
     if any(_is_plain_config(p) for p in paths):
         topics.append("config")
     code_topics = _code_topics(paths)
     if code_topics:
-        if len(code_topics) <= 3:
-            label = ", ".join(code_topics)
-        else:
-            head = ", ".join(code_topics[:3])
-            rest = len(code_topics) - 3
-            label = f"{head} and {rest} related areas"
-        topics.append(label)
+        topics.append(", ".join(code_topics[:5]))
 
     # Dedupe while preserving order
     seen: set[str] = set()
@@ -178,15 +189,15 @@ def suggest_from_changes(
     else:
         message = f"{verb} {topics[0]}, {topics[1]}, and {topics[2]}"
 
-    scope = area_scope_suffix(paths)
-    if scope:
-        scope_key = _alnum_key(scope.replace("for", "", 1))
+    scope_suffix = area_scope_suffix(paths)
+    if scope_suffix:
+        scope_key = _alnum_key(scope_suffix.replace("for", "", 1))
         msg_key = _alnum_key(message)
         if scope_key and scope_key not in msg_key:
-            message += scope
+            message += scope_suffix
 
-    if added_any and has_commits is False and message.startswith("Add "):
-        message = message.replace("Add ", "Add initial ", 1)
+    if added_any and has_commits is False and message.startswith("add "):
+        message = message.replace("add ", "add initial ", 1)
 
     message = truncate_commit_subject(message, MAX_COMMIT_SUBJECT_CHARS)
 
@@ -194,4 +205,11 @@ def suggest_from_changes(
         commit_type, message, diff_text
     )
 
-    return Suggestion(add_args=paths, commit_type=commit_type, commit_message=message)
+    cc_scope = infer_scope(paths)
+
+    return Suggestion(
+        add_args=paths,
+        commit_type=commit_type,
+        commit_message=message,
+        scope=cc_scope,
+    )
