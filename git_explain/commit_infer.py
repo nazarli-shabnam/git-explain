@@ -47,7 +47,7 @@ def refine_type_and_message_from_diff(
     when the diff matches known bugfix patterns.
     """
     ct = (commit_type or "").upper()
-    if ct in ("DOCS", "TEST", "TESTS", "CHORE"):
+    if ct in ("DOCS", "TEST", "TESTS", "CHORE", "BUILD", "CI", "STYLE", "PERF"):
         return commit_type, commit_message
 
     subject = infer_fix_subject_from_diff(diff_text)

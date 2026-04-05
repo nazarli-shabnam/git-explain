@@ -1,54 +1,76 @@
 from git_explain.gemini import (
-    COMMIT_LINE_CONVENTIONAL_RE,
     COMMIT_LINE_RE,
+    _COMMIT_LINE_BRACKET_RE,
     _fallback_type_and_message_with_context,
     _is_generic_message,
+    _normalize_type,
     truncate_commit_subject,
 )
 
 
-def test_commit_line_re_matches_tests_not_test() -> None:
-    """COMMIT_LINE_RE should match [TESTS] but not [TEST]."""
-    line_tests = 'git commit -m "[TESTS] Add unit tests"'
-    m = COMMIT_LINE_RE.match(line_tests)
+def test_commit_line_re_matches_conventional_types() -> None:
+    """COMMIT_LINE_RE should match conventional commits: type: subject."""
+    for line, expected_type in [
+        ('git commit -m "feat: add new feature"', "FEAT"),
+        ('git commit -m "fix: correct the bug"', "FIX"),
+        ('git commit -m "docs: update readme"', "DOCS"),
+        ('git commit -m "refactor: simplify logic"', "REFACTOR"),
+        ('git commit -m "test: add unit tests"', "TEST"),
+        ('git commit -m "chore: update deps"', "CHORE"),
+        ('git commit -m "build: update dockerfile"', "BUILD"),
+        ('git commit -m "ci: add github workflow"', "CI"),
+        ('git commit -m "style: fix formatting"', "STYLE"),
+        ('git commit -m "perf: optimize query"', "PERF"),
+    ]:
+        m = COMMIT_LINE_RE.match(line)
+        assert m is not None, f"Expected match for {line}"
+        assert _normalize_type(m.group(1)) == expected_type
+
+
+def test_commit_line_re_matches_scope_and_breaking() -> None:
+    """COMMIT_LINE_RE should parse scope and breaking change indicator."""
+    line = 'git commit -m "feat(cli): add new flag"'
+    m = COMMIT_LINE_RE.match(line)
     assert m is not None
-    assert m.group(1).upper() == "TESTS"
-    assert "Add unit tests" in m.group(2)
+    assert m.group(1).upper() == "FEAT"
+    assert m.group(2) == "cli"
+    assert m.group(3) == ""
+    assert "add new flag" in m.group(4)
 
-    line_test = 'git commit -m "[TEST] Add unit test"'
-    m = COMMIT_LINE_RE.match(line_test)
-    assert m is None
-
-
-def test_commit_line_conventional_re_matches_tests() -> None:
-    """COMMIT_LINE_CONVENTIONAL_RE should match 'tests:' not 'test:'."""
-    line = 'git commit -m "tests: add unit tests"'
-    m = COMMIT_LINE_CONVENTIONAL_RE.match(line)
+    line = 'git commit -m "feat(api)!: drop legacy endpoint"'
+    m = COMMIT_LINE_RE.match(line)
     assert m is not None
-    assert m.group(1).lower() == "tests"
+    assert m.group(2) == "api"
+    assert m.group(3) == "!"
 
-    line_test = 'git commit -m "test: add unit test"'
-    m = COMMIT_LINE_CONVENTIONAL_RE.match(line_test)
-    assert m is None
+    line = 'git commit -m "fix!: breaking bugfix"'
+    m = COMMIT_LINE_RE.match(line)
+    assert m is not None
+    assert m.group(2) is None
+    assert m.group(3) == "!"
 
 
-def test_commit_line_re_matches_other_types() -> None:
+def test_bracket_re_matches_legacy_format() -> None:
+    """_COMMIT_LINE_BRACKET_RE should match [TYPE] format as fallback."""
     for line in [
         'git commit -m "[FEAT] Add feature"',
         'git commit -m "[FIX] Fix bug"',
         'git commit -m "[DOCS] Update readme"',
-        'git commit -m "[REFACTOR] Simplify logic"',
-        'git commit -m "[CHORE] Add Docker and nginx config"',
+        'git commit -m "[TESTS] Add tests"',
+        'git commit -m "[CHORE] Add Docker config"',
+        'git commit -m "[BUILD] Update dockerfile"',
+        'git commit -m "[CI] Add workflow"',
     ]:
-        m = COMMIT_LINE_RE.match(line)
-        assert m is not None, f"Expected match for {line}"
+        m = _COMMIT_LINE_BRACKET_RE.match(line)
+        assert m is not None, f"Expected bracket match for {line}"
 
 
-def test_commit_line_conventional_matches_chore() -> None:
-    line = 'git commit -m "chore: add docker compose"'
-    m = COMMIT_LINE_CONVENTIONAL_RE.match(line)
-    assert m is not None
-    assert m.group(1).lower() == "chore"
+def test_normalize_type_converts_tests_to_test() -> None:
+    assert _normalize_type("TESTS") == "TEST"
+    assert _normalize_type("tests") == "TEST"
+    assert _normalize_type("TEST") == "TEST"
+    assert _normalize_type("feat") == "FEAT"
+    assert _normalize_type("unknown") == "CHORE"
 
 
 def test_is_generic_message_flags_vague_add_changes() -> None:
@@ -143,7 +165,7 @@ def test_fallback_prefers_stems_when_folder_is_same() -> None:
     assert "cli" in low or "gemini" in low or "git" in low
 
 
-def test_fallback_many_folders_uses_related_areas_not_plus_more() -> None:
+def test_fallback_many_folders_lists_topics_without_overflow() -> None:
     folders = [f"ui/src/area{i}/File.tsx" for i in range(8)]
     _ctype, msg = _fallback_type_and_message_with_context(
         files=folders,
@@ -151,4 +173,5 @@ def test_fallback_many_folders_uses_related_areas_not_plus_more() -> None:
         has_commits=True,
     )
     assert "(+" not in msg
-    assert "related areas" in msg.lower()
+    assert "related areas" not in msg.lower()
+    assert "area0" in msg.lower() or "area1" in msg.lower()
