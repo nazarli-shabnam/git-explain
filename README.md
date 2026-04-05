@@ -31,7 +31,7 @@ Run that from the repo root so Python picks up the `git_explain` folder—no `pi
 Optional: install a specific tag from GitHub instead of PyPI:
 
 ```bash
-pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v2.1.8"
+pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v2.2.1"
 ```
 
 ---
