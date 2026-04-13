@@ -78,3 +78,7 @@ Everything else (`--auto`, `--staged-only`, `--cwd`, model override, shell compl
 pip install -e ".[dev]"
 pytest -q
 ```
+
+## GitAds Sponsored
+[![Sponsored by GitAds](https://gitads.dev/v1/ad-serve?source=nazarli-shabnam/git-explain@github)](https://gitads.dev/v1/ad-track?source=nazarli-shabnam/git-explain@github)
+
