@@ -307,6 +307,11 @@ def run(
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+    repo_env = repo_root / ".env"
+    if repo_env.is_file():
+        load_dotenv(dotenv_path=repo_env, override=False)
+
     if not combined.strip():
         console.print("[yellow]No staged, unstaged, or untracked changes.[/yellow]")
         return
@@ -595,12 +600,12 @@ def run(
         do_apply = True
     else:
         prompt = (
-            "Apply these commit(s)? (y/n/auto)"
+            "Apply these commit(s)? (y/n)"
             if len(plan) > 1
-            else "Apply these commands? (y/n/auto)"
+            else "Apply these commands? (y/n)"
         )
-        choice = typer.prompt(prompt, default="n").strip().lower()
-        do_apply = choice == "auto" or choice in ("y", "yes")
+        choice = typer.prompt(prompt, default="y").strip().lower()
+        do_apply = choice in ("y", "yes")
 
     if do_apply:
         for name, sug in plan:
