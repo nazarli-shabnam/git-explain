@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/git-explain.svg?label=pypi)](https://pypi.org/project/git-explain/)
 [![GitHub tag](https://img.shields.io/github/v/tag/nazarli-shabnam/git-explain?label=repo)](https://github.com/nazarli-shabnam/git-explain/tags)
-
+<!-- GitAds-Verify: 29ITVVWNRUVU524NJ5ZRR6DSZKIHP3EX -->
 
 ---
 
