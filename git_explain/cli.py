@@ -1,5 +1,6 @@
 """CLI for git-explain: suggest and optionally apply commit message from diffs."""
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass, replace
@@ -7,12 +8,15 @@ from pathlib import Path
 from typing import Iterable
 
 import typer
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from git_explain.gemini import Suggestion, suggest_commands
+from git_explain.gemini import (
+    Suggestion,
+    suggest_commands,
+)
 from git_explain.heuristics import suggest_from_changes
 from git_explain.git import (
     get_combined_diff,
@@ -25,11 +29,11 @@ from git_explain.run import (
     normalize_commit_subject_for_dash_m,
 )
 
-load_dotenv()
 app = typer.Typer()
 console = Console()
 
 _DIFF_INFER_MAX_CHARS = 50_000
+_AI_ENV_KEYS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_MODEL")
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,18 @@ def _parse_combined(combined: str) -> tuple[bool | None, list[Change]]:
             )
         )
     return has_commits, changes
+
+
+def _load_ai_env_from_dotenv(dotenv_path: Path) -> None:
+    """Load only AI-related vars from .env, overriding existing process values."""
+    values = dotenv_values(dotenv_path)
+    for key in _AI_ENV_KEYS:
+        raw = values.get(key)
+        if raw is None:
+            continue
+        val = str(raw).strip()
+        if val:
+            os.environ[key] = val
 
 
 def _render_combined(
@@ -307,6 +323,11 @@ def run(
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+    repo_env = repo_root / ".env"
+    if repo_env.is_file():
+        _load_ai_env_from_dotenv(repo_env)
+
     if not combined.strip():
         console.print("[yellow]No staged, unstaged, or untracked changes.[/yellow]")
         return
@@ -468,37 +489,12 @@ def run(
         return h, None
 
     selected_pairs = [(ch.status, ch.path) for ch in selected]
-    unique_paths = {p for _, p in selected_pairs}
-
-    mode = "one"
-    if len(unique_paths) > 1:
-        if staged_only:
-            console.print(
-                "[dim]Note:[/dim] split commits are not available with --staged-only: "
-                "each commit would need its own staging, but this mode skips git add. "
-                "Using a single commit for everything currently staged."
-            )
-        else:
-            mode_input = (
-                typer.prompt("Commit mode: one or split", default="one").strip().lower()
-            )
-            if mode_input in ("one", "split"):
-                mode = mode_input
-
     plan: list[tuple[str, Suggestion]] = []
     ai_fallback_notes: list[tuple[str, str]] = []
-    if mode == "split":
-        groups = _group_changes(selected_pairs)
-        for gname, items in groups.items():
-            sug, fb = suggest_for(items, title=gname.capitalize())
-            plan.append((gname, sug))
-            if fb:
-                ai_fallback_notes.append((gname, fb))
-    else:
-        sug, fb = suggest_for(selected_pairs, title="Selected")
-        plan.append(("one", sug))
-        if fb:
-            ai_fallback_notes.append(("", fb))
+    sug, fb = suggest_for(selected_pairs, title="Selected")
+    plan.append(("one", sug))
+    if fb:
+        ai_fallback_notes.append(("", fb))
 
     if ai and ai_fallback_notes:
         lines = [
@@ -506,11 +502,7 @@ def run(
             "Commit message(s) come from [bold]local heuristics[/bold] instead.",
             "",
         ]
-        if mode == "split":
-            for gname, reason in ai_fallback_notes:
-                lines.append(f"[dim]{gname}:[/dim] {reason}")
-        else:
-            lines.append(ai_fallback_notes[0][1])
+        lines.append(ai_fallback_notes[0][1])
         lines.append("")
         lines.append(
             "[dim]Check API key (GEMINI_API_KEY / GOOGLE_API_KEY), quota, model name, and network.[/dim]"
@@ -595,12 +587,12 @@ def run(
         do_apply = True
     else:
         prompt = (
-            "Apply these commit(s)? (y/n/auto)"
+            "Apply these commit(s)? (y/n)"
             if len(plan) > 1
-            else "Apply these commands? (y/n/auto)"
+            else "Apply these commands? (y/n)"
         )
-        choice = typer.prompt(prompt, default="n").strip().lower()
-        do_apply = choice == "auto" or choice in ("y", "yes")
+        choice = typer.prompt(prompt, default="y").strip().lower()
+        do_apply = choice in ("y", "yes")
 
     if do_apply:
         for name, sug in plan:
