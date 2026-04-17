@@ -2,7 +2,6 @@
 
 import os
 import re
-import time
 from dataclasses import dataclass
 
 from google import genai
@@ -480,41 +479,15 @@ def suggest_commands(
     model = model or os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL
     system_instruction = SYSTEM_PROMPT_WITH_DIFF if with_diff else SYSTEM_PROMPT
     client = _get_client()
-    last_err = None
-    for attempt in range(2):
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=diff.strip(),
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    temperature=0.2,
-                    max_output_tokens=1536 if with_diff else 512,
-                ),
-            )
-            break
-        except Exception as e:
-            last_err = e
-            err_str = str(e).lower()
-            if attempt == 0 and (
-                "429" in err_str
-                or "resource_exhausted" in err_str
-                or "quota" in err_str
-            ):
-                wait = 15
-                if "retry in " in err_str:
-                    m = re.search(
-                        r"retry in (\d+(?:\.\d+)?)\s*s", err_str, re.IGNORECASE
-                    )
-                    if m:
-                        wait = min(60, max(5, int(float(m.group(1)) + 1)))
-                time.sleep(wait)
-                continue
-            raise
-    else:
-        if last_err is not None:
-            raise last_err
-        raise RuntimeError("Unexpected state in suggest_commands")
+    response = client.models.generate_content(
+        model=model,
+        contents=diff.strip(),
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.2,
+            max_output_tokens=1536 if with_diff else 512,
+        ),
+    )
     text = (response.text or "").strip()
     raw = text
     # Strip markdown code block if present
