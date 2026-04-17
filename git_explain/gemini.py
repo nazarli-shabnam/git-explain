@@ -1,7 +1,10 @@
-"""Suggest git add and commit from diff using Google Gemini."""
+"""Suggest git add and commit from AI providers (Gemini/OpenRouter)."""
 
+import json
 import os
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 from google import genai
@@ -110,6 +113,8 @@ _COMMIT_LINE_BRACKET_RE = re.compile(
 )
 
 DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
+_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 def _normalize_type(t: str) -> str:
@@ -461,6 +466,93 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
+def infer_provider_from_model(model: str) -> str:
+    """Infer provider by model pattern.
+
+    - gemini-* and bare gemma-* names => Gemini provider
+    - slash/colon names (e.g. google/gemma-4-31b-it:free) => OpenRouter
+    """
+    m = (model or "").strip().lower()
+    if "/" in m or ":" in m:
+        return "openrouter"
+    return "gemini"
+
+
+def get_ai_key_error(model: str) -> str | None:
+    provider = infer_provider_from_model(model)
+    if provider == "openrouter":
+        if not os.environ.get("AI_API_KEY"):
+            return (
+                "Model uses OpenRouter but AI_API_KEY is not set. "
+                "Set AI_API_KEY in repo .env for OpenRouter models."
+            )
+        return None
+    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+        return "Set GEMINI_API_KEY or GOOGLE_API_KEY in environment."
+    return None
+
+
+def _openrouter_generate_content(
+    *,
+    model: str,
+    prompt_body: str,
+    with_diff: bool,
+) -> str:
+    api_key = os.environ.get("AI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "Model uses OpenRouter but AI_API_KEY is not set. "
+            "Set AI_API_KEY in repo .env for OpenRouter models."
+        )
+    system_instruction = SYSTEM_PROMPT_WITH_DIFF if with_diff else SYSTEM_PROMPT
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": prompt_body},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 1536 if with_diff else 512,
+    }
+    req = urllib.request.Request(
+        _OPENROUTER_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=35) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenRouter HTTP {e.code}: {err_body}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"OpenRouter request failed: {e}") from e
+    try:
+        parsed = json.loads(body)
+        choices = parsed.get("choices") or []
+        if not choices:
+            raise RuntimeError("OpenRouter response missing choices.")
+        msg = choices[0].get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, list):
+            chunks: list[str] = []
+            for c in content:
+                if isinstance(c, dict):
+                    txt = c.get("text")
+                    if isinstance(txt, str):
+                        chunks.append(txt)
+            content = "\n".join(chunks)
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("OpenRouter response has empty content.")
+        return content.strip()
+    except json.JSONDecodeError as e:
+        raise RuntimeError("OpenRouter response is not valid JSON.") from e
+
+
 def suggest_commands(
     diff: str,
     model: str | None = None,
@@ -476,19 +568,33 @@ def suggest_commands(
     """
     if not diff or not diff.strip():
         return None, ""
-    model = model or os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL
-    system_instruction = SYSTEM_PROMPT_WITH_DIFF if with_diff else SYSTEM_PROMPT
-    client = _get_client()
-    response = client.models.generate_content(
-        model=model,
-        contents=diff.strip(),
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.2,
-            max_output_tokens=1536 if with_diff else 512,
-        ),
+    model = (
+        model
+        or os.environ.get("AI_MODEL")
+        or os.environ.get("GEMINI_MODEL")
+        or DEFAULT_MODEL
     )
-    text = (response.text or "").strip()
+    key_err = get_ai_key_error(model)
+    if key_err:
+        raise RuntimeError(key_err)
+    provider = infer_provider_from_model(model)
+    if provider == "openrouter":
+        text = _openrouter_generate_content(
+            model=model, prompt_body=diff.strip(), with_diff=with_diff
+        )
+    else:
+        system_instruction = SYSTEM_PROMPT_WITH_DIFF if with_diff else SYSTEM_PROMPT
+        client = _get_client()
+        response = client.models.generate_content(
+            model=model,
+            contents=diff.strip(),
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.2,
+                max_output_tokens=1536 if with_diff else 512,
+            ),
+        )
+        text = (response.text or "").strip()
     raw = text
     # Strip markdown code block if present
     if text.startswith("```"):
