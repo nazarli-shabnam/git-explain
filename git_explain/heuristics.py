@@ -94,6 +94,11 @@ def _alnum_key(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 
 
+def _path_first_segment(path: str) -> str:
+    parts = [x for x in path.replace("\\", "/").strip("/").split("/") if x]
+    return parts[0].lower() if parts else "root"
+
+
 def suggest_from_changes(
     *,
     changes: list[tuple[str, str]],
@@ -172,7 +177,21 @@ def suggest_from_changes(
         topics.append("config")
     code_topics = _code_topics(paths)
     if code_topics:
-        topics.append(", ".join(code_topics[:5]))
+        if len(code_topics) > 4:
+            roots = {_path_first_segment(p) for p in paths}
+            if len(roots) == 1:
+                root = next(iter(roots))
+                n = len(
+                    [p for p in paths if os.path.splitext(p)[1].lower() in CODE_EXTS]
+                )
+                topics.append(f"{n} modules under {root}")
+            elif len(roots) == 2:
+                a, b = sorted(roots)
+                topics.append(f"{len(paths)} files across {a} and {b}")
+            else:
+                topics.append(", ".join(code_topics[:4]))
+        else:
+            topics.append(", ".join(code_topics[:5]))
 
     # Dedupe while preserving order
     seen: set[str] = set()
