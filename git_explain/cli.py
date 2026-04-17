@@ -14,7 +14,11 @@ from rich.panel import Panel
 from rich.text import Text
 
 from git_explain.gemini import (
+    DEFAULT_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
     Suggestion,
+    get_ai_key_error,
+    infer_provider_from_model,
     suggest_commands,
 )
 from git_explain.heuristics import suggest_from_changes
@@ -33,7 +37,13 @@ app = typer.Typer()
 console = Console()
 
 _DIFF_INFER_MAX_CHARS = 50_000
-_AI_ENV_KEYS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_MODEL")
+_AI_ENV_KEYS = (
+    "AI_MODEL",
+    "AI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GEMINI_MODEL",
+)
 
 
 @dataclass(frozen=True)
@@ -103,6 +113,60 @@ def _load_ai_env_from_dotenv(dotenv_path: Path) -> None:
         val = str(raw).strip()
         if val:
             os.environ[key] = val
+
+
+def _upsert_env_var(dotenv_path: Path, key: str, value: str) -> None:
+    lines: list[str] = []
+    if dotenv_path.exists():
+        lines = dotenv_path.read_text(encoding="utf-8").splitlines()
+    replaced = False
+    out: list[str] = []
+    prefix = key + "="
+    for ln in lines:
+        if ln.startswith(prefix):
+            out.append(f"{key}={value}")
+            replaced = True
+        else:
+            out.append(ln)
+    if not replaced:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"{key}={value}")
+    dotenv_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def _ensure_repo_env_file(repo_env: Path) -> bool:
+    if repo_env.is_file():
+        return True
+    create = typer.prompt("No .env found. Create one now? (y/n)", default="y").strip().lower()
+    if create not in ("y", "yes"):
+        return False
+    repo_env.write_text("", encoding="utf-8")
+    return True
+
+
+def _choose_and_persist_ai_model(repo_env: Path) -> str:
+    console.print(
+        "[dim]Choose default AI model for this project:[/dim]\n"
+        f"  1. Gemini Flash ({DEFAULT_MODEL})\n"
+        f"  2. Gemma 4 31B via OpenRouter ({DEFAULT_OPENROUTER_MODEL})"
+    )
+    choice = typer.prompt("Pick model (1 or 2)", default="1").strip()
+    model = DEFAULT_OPENROUTER_MODEL if choice == "2" else DEFAULT_MODEL
+    _upsert_env_var(repo_env, "AI_MODEL", model)
+    os.environ["AI_MODEL"] = model
+    return model
+
+
+def _resolve_project_ai_model(repo_env: Path, model_override: str | None) -> str | None:
+    if model_override:
+        return model_override
+    model = (os.environ.get("AI_MODEL") or "").strip()
+    if model:
+        return model
+    if not _ensure_repo_env_file(repo_env):
+        return None
+    return _choose_and_persist_ai_model(repo_env)
 
 
 def _render_combined(
@@ -215,7 +279,6 @@ def _validate_suggest_flags(
     *,
     suggest: bool,
     auto: bool,
-    ai: bool,
     staged_only: bool,
     model: str | None,
     with_diff: bool,
@@ -225,8 +288,6 @@ def _validate_suggest_flags(
     bad: list[str] = []
     if auto:
         bad.append("--auto")
-    if ai:
-        bad.append("--ai")
     if staged_only:
         bad.append("--staged-only")
     if with_diff:
@@ -246,9 +307,6 @@ def main(
     auto: bool = typer.Option(
         False, "--auto", help="Apply suggestion without prompting"
     ),
-    ai: bool = typer.Option(
-        False, "--ai", help="Use Gemini to suggest commit message (default: off)"
-    ),
     staged_only: bool = typer.Option(
         False,
         "--staged-only",
@@ -260,15 +318,12 @@ def main(
     model: str | None = typer.Option(
         None,
         "--model",
-        help=(
-            "Override Gemini model name for --ai "
-            "(defaults to GEMINI_MODEL env var or internal default)."
-        ),
+        help="Override AI model for this run (defaults to AI_MODEL from repo .env).",
     ),
     with_diff: bool = typer.Option(
         False,
         "--with-diff",
-        help="With --ai: send full diff to the model for detailed, specific commit messages (opt-in).",
+        help="Send full diff to the configured AI model for more specific messages (opt-in).",
     ),
     suggest: bool = typer.Option(
         False,
@@ -281,7 +336,6 @@ def main(
     _validate_suggest_flags(
         suggest=suggest,
         auto=auto,
-        ai=ai,
         staged_only=staged_only,
         model=model,
         with_diff=with_diff,
@@ -289,7 +343,6 @@ def main(
     run(
         cwd=Path(cwd) if cwd else None,
         auto=auto,
-        ai=ai,
         staged_only=staged_only,
         model=model,
         with_diff=with_diff,
@@ -300,23 +353,12 @@ def main(
 def run(
     cwd: Path | None = None,
     auto: bool = False,
-    ai: bool = False,
     staged_only: bool = False,
     model: str | None = None,
     with_diff: bool = False,
     suggest: bool = False,
 ) -> None:
     console.print(Text("git-explain", style="bold"))
-    if with_diff and not ai:
-        console.print(
-            "[yellow]Warning:[/yellow] --with-diff has no effect without --ai. "
-            "It only affects AI-generated commit messages."
-        )
-        enable = typer.prompt("Enable AI? (y/n)", default="n").strip().lower()
-        if enable in ("y", "yes"):
-            ai = True
-        else:
-            with_diff = False
 
     try:
         combined, repo_root = get_combined_diff(cwd=cwd)
@@ -325,6 +367,9 @@ def run(
         raise typer.Exit(1)
 
     repo_env = repo_root / ".env"
+    if repo_env.is_file():
+        _load_ai_env_from_dotenv(repo_env)
+    ai_model = _resolve_project_ai_model(repo_env, model)
     if repo_env.is_file():
         _load_ai_env_from_dotenv(repo_env)
 
@@ -353,10 +398,16 @@ def run(
             if len(staged_diff) > _DIFF_INFER_MAX_CHARS
             else staged_diff
         )
+        if not ai_model:
+            console.print(
+                "[red]Error:[/red] --suggest requires an AI model. "
+                "Set AI_MODEL in repo .env or pass --model."
+            )
+            raise typer.Exit(1)
         try:
             sug, _raw = suggest_commands(
                 payload,
-                model=None,
+                model=ai_model,
                 with_diff=bool(staged_diff),
                 unified_diff_for_infer=infer_diff,
             )
@@ -457,7 +508,7 @@ def run(
                     else raw_d
                 )
 
-        if ai:
+        if ai_model:
             payload = _render_combined(has_commits, change_items, title=title)
             if with_diff:
                 paths_for_diff = [p for _, p in change_items]
@@ -467,7 +518,7 @@ def run(
             try:
                 sug, _raw = suggest_commands(
                     payload,
-                    model=model,
+                    model=ai_model,
                     with_diff=with_diff,
                     unified_diff_for_infer=infer_diff,
                 )
@@ -496,17 +547,21 @@ def run(
     if fb:
         ai_fallback_notes.append(("", fb))
 
-    if ai and ai_fallback_notes:
+    if ai_model and ai_fallback_notes:
+        provider = infer_provider_from_model(ai_model)
+        key_help = (
+            "Check AI_API_KEY, AI_MODEL, and network."
+            if provider == "openrouter"
+            else "Check GEMINI_API_KEY / GOOGLE_API_KEY, AI_MODEL, quota, model name, and network."
+        )
         lines = [
-            "[bold]You used --ai, but Gemini was not used for the suggestion below.[/bold]",
+            "[bold]Configured AI was not used for the suggestion below.[/bold]",
             "Commit message(s) come from [bold]local heuristics[/bold] instead.",
             "",
         ]
         lines.append(ai_fallback_notes[0][1])
         lines.append("")
-        lines.append(
-            "[dim]Check API key (GEMINI_API_KEY / GOOGLE_API_KEY), quota, model name, and network.[/dim]"
-        )
+        lines.append(f"[dim]{key_help}[/dim]")
         console.print(
             Panel(
                 "\n".join(lines),
