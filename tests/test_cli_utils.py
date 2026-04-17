@@ -1,7 +1,10 @@
+import os
+
 import pytest
 
 from git_explain.cli import (
     _group_changes,
+    _load_ai_env_from_dotenv,
     _parse_combined,
     _parse_selection,
     _ps_quote,
@@ -26,6 +29,12 @@ def test_parse_selection_ranges() -> None:
 
     idx, paths = _parse_selection("2-1", 3)
     assert idx == [1, 2]
+    assert paths == []
+
+
+def test_parse_selection_ignores_out_of_range_indices() -> None:
+    idx, paths = _parse_selection("0,2,7,3-10", 4)
+    assert idx == [2, 3, 4]
     assert paths == []
 
 
@@ -132,6 +141,28 @@ def test_group_changes_code_bucket() -> None:
     assert groups["code"] == [("M", "src/app.ts")]
 
 
+def test_group_changes_prioritizes_test_bucket_over_code() -> None:
+    changes = [
+        ("M", "tests/foo.spec.ts"),
+        ("M", "src/auth_test.py"),
+    ]
+    groups = _group_changes(changes)
+    assert "tests" in groups
+    assert ("M", "tests/foo.spec.ts") in groups["tests"]
+    assert ("M", "src/auth_test.py") in groups["tests"]
+    assert "code" not in groups or ("M", "tests/foo.spec.ts") not in groups["code"]
+
+
+def test_group_changes_handles_windows_style_paths() -> None:
+    changes = [
+        ("M", r"tests\test_cli.py"),
+        ("M", r"git_explain\cli.py"),
+    ]
+    groups = _group_changes(changes)
+    assert ("M", r"tests\test_cli.py") in groups["tests"]
+    assert ("M", r"git_explain\cli.py") in groups["code"]
+
+
 def test_validate_suggest_flags_allows_suggest_alone() -> None:
     _validate_suggest_flags(
         suggest=True,
@@ -154,3 +185,59 @@ def test_validate_suggest_flags_rejects_combined_flags() -> None:
             with_diff=False,
         )
     assert "--suggest is a dedicated mode" in str(ex.value)
+
+
+def test_load_ai_env_from_dotenv_only_sets_ai_keys(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GEMINI_API_KEY=from-file\n"
+        "GOOGLE_API_KEY=from-google\n"
+        "GEMINI_MODEL=gemini-model\n"
+        "PATH=should-not-touch\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setenv("PATH", "existing-path")
+
+    _load_ai_env_from_dotenv(env_file)
+
+    assert os.environ.get("GEMINI_API_KEY") == "from-file"
+    assert os.environ.get("GOOGLE_API_KEY") == "from-google"
+    assert os.environ.get("GEMINI_MODEL") == "gemini-model"
+    assert os.environ.get("PATH") == "existing-path"
+
+
+def test_load_ai_env_from_dotenv_overrides_existing(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GEMINI_API_KEY=from-file\nGOOGLE_API_KEY=from-file\nGEMINI_MODEL=from-file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "existing-gemini")
+    monkeypatch.setenv("GOOGLE_API_KEY", "existing-google")
+    monkeypatch.setenv("GEMINI_MODEL", "existing-model")
+
+    _load_ai_env_from_dotenv(env_file)
+
+    assert os.environ.get("GEMINI_API_KEY") == "from-file"
+    assert os.environ.get("GOOGLE_API_KEY") == "from-file"
+    assert os.environ.get("GEMINI_MODEL") == "from-file"
+
+
+def test_load_ai_env_from_dotenv_ignores_empty_values(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GEMINI_API_KEY=\nGOOGLE_API_KEY=   \nGEMINI_MODEL=\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "existing-gemini")
+    monkeypatch.setenv("GOOGLE_API_KEY", "existing-google")
+    monkeypatch.setenv("GEMINI_MODEL", "existing-model")
+
+    _load_ai_env_from_dotenv(env_file)
+
+    assert os.environ.get("GEMINI_API_KEY") == "existing-gemini"
+    assert os.environ.get("GOOGLE_API_KEY") == "existing-google"
+    assert os.environ.get("GEMINI_MODEL") == "existing-model"

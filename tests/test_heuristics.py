@@ -72,6 +72,23 @@ def test_test_only_paths_get_specific_test_message() -> None:
     assert "project files" not in m
 
 
+def test_many_modules_same_root_gets_compact_phrase() -> None:
+    """Avoid listing every folder when many packages sit under one tree (e.g. api/)."""
+    s = suggest_from_changes(
+        changes=[
+            ("M", "api/internal/auth/a.go"),
+            ("M", "api/internal/handler/b.go"),
+            ("M", "api/internal/model/c.go"),
+            ("M", "api/internal/router/d.go"),
+            ("M", "api/internal/config/e.go"),
+            ("M", "api/internal/oauth/f.go"),
+        ],
+        has_commits=True,
+    )
+    m = s.commit_message.lower()
+    assert "modules under api" in m
+
+
 def test_docker_nginx_env_paths_get_specific_build_message() -> None:
     """Infra paths should not collapse to 'add changes'."""
     s = suggest_from_changes(
