@@ -4,6 +4,8 @@ from git_explain.gemini import (
     _fallback_type_and_message_with_context,
     _is_generic_message,
     _normalize_type,
+    get_ai_key_error,
+    infer_provider_from_model,
     truncate_commit_subject,
 )
 
@@ -71,6 +73,26 @@ def test_normalize_type_converts_tests_to_test() -> None:
     assert _normalize_type("TEST") == "TEST"
     assert _normalize_type("feat") == "FEAT"
     assert _normalize_type("unknown") == "CHORE"
+
+
+def test_infer_provider_from_model_patterns() -> None:
+    assert infer_provider_from_model("gemini-2.5-flash") == "gemini"
+    assert infer_provider_from_model("google/gemma-4-31b-it:free") == "openrouter"
+
+
+def test_get_ai_key_error_for_openrouter(monkeypatch) -> None:
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    err = get_ai_key_error("google/gemma-4-31b-it:free")
+    assert err is not None
+    assert "AI_API_KEY" in err
+
+
+def test_get_ai_key_error_for_gemini(monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    err = get_ai_key_error("gemini-2.5-flash")
+    assert err is not None
+    assert "GEMINI_API_KEY" in err
 
 
 def test_is_generic_message_flags_vague_add_changes() -> None:
