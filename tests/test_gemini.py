@@ -1,8 +1,12 @@
+from google.genai import errors as genai_errors
+
 from git_explain.gemini import (
     COMMIT_LINE_RE,
     _COMMIT_LINE_BRACKET_RE,
     _fallback_type_and_message_with_context,
     _is_generic_message,
+    _is_retryable_gemini_error,
+    _model_chain,
     _normalize_type,
     get_ai_key_error,
     infer_provider_from_model,
@@ -77,22 +81,37 @@ def test_normalize_type_converts_tests_to_test() -> None:
 
 def test_infer_provider_from_model_patterns() -> None:
     assert infer_provider_from_model("gemini-2.5-flash") == "gemini"
-    assert infer_provider_from_model("google/gemma-4-31b-it:free") == "openrouter"
+    assert infer_provider_from_model("qwen/qwen3-coder:free") == "gemini"
+    assert infer_provider_from_model("mistral-large-latest") == "mistral"
 
 
-def test_get_ai_key_error_for_openrouter(monkeypatch) -> None:
+def test_get_ai_key_error_requires_api_key(monkeypatch) -> None:
     monkeypatch.delenv("AI_API_KEY", raising=False)
-    err = get_ai_key_error("google/gemma-4-31b-it:free")
+    err = get_ai_key_error("gemini-2.5-flash")
     assert err is not None
     assert "AI_API_KEY" in err
 
 
-def test_get_ai_key_error_for_gemini(monkeypatch) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    err = get_ai_key_error("gemini-2.5-flash")
-    assert err is not None
-    assert "GEMINI_API_KEY" in err
+def test_model_chain_dedupes_primary_from_fallbacks(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "AI_MODEL_FALLBACKS",
+        "gemini-2.5-flash-lite,gemini-2.5-flash",
+    )
+    assert _model_chain("gemini-2.5-flash") == [
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    ]
+
+
+def test_is_retryable_gemini_error_429() -> None:
+    err = genai_errors.ClientError(
+        429, {"error": {"message": "rate"}}, None
+    )
+    assert _is_retryable_gemini_error(err) is True
+
+
+def test_is_retryable_gemini_error_not_generic() -> None:
+    assert _is_retryable_gemini_error(ValueError("invalid")) is False
 
 
 def test_is_generic_message_flags_vague_add_changes() -> None:
