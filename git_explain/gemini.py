@@ -1,13 +1,12 @@
-"""Suggest git add and commit from AI providers (Gemini/OpenRouter)."""
+"""Suggest git add and commit from AI (Gemini API; optional Mistral later)."""
 
-import json
 import os
 import re
-import urllib.error
-import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from git_explain.commit_infer import refine_type_and_message_from_diff
@@ -113,8 +112,8 @@ _COMMIT_LINE_BRACKET_RE = re.compile(
 )
 
 DEFAULT_MODEL = "gemini-2.5-flash"
-DEFAULT_OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Tried in order after AI_MODEL when primary hits rate limits / overload (comma-separated in .env).
+DEFAULT_AI_MODEL_FALLBACKS = "gemini-2.5-flash-lite,gemini-3-flash-preview"
 
 
 def _normalize_type(t: str) -> str:
@@ -460,97 +459,93 @@ class Suggestion:
 
 
 def _get_client() -> genai.Client:
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("AI_API_KEY")
     if not api_key:
-        raise RuntimeError("Set GEMINI_API_KEY or GOOGLE_API_KEY in environment.")
+        raise RuntimeError("Set AI_API_KEY in environment.")
     return genai.Client(api_key=api_key)
 
 
 def infer_provider_from_model(model: str) -> str:
-    """Infer provider by model pattern.
-
-    - gemini-* and bare gemma-* names => Gemini provider
-    - slash/colon names (e.g. google/gemma-4-31b-it:free) => OpenRouter
-    """
+    """Infer provider by model id (future: Mistral). Currently Gemini API only."""
     m = (model or "").strip().lower()
-    if "/" in m or ":" in m:
-        return "openrouter"
+    if m.startswith("mistral"):
+        return "mistral"
     return "gemini"
 
 
 def get_ai_key_error(model: str) -> str | None:
-    provider = infer_provider_from_model(model)
-    if provider == "openrouter":
-        if not os.environ.get("AI_API_KEY"):
-            return (
-                "Model uses OpenRouter but AI_API_KEY is not set. "
-                "Set AI_API_KEY in repo .env for OpenRouter models."
-            )
-        return None
-    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
-        return "Set GEMINI_API_KEY or GOOGLE_API_KEY in environment."
+    if not os.environ.get("AI_API_KEY"):
+        return "Set AI_API_KEY in environment."
     return None
 
 
-def _openrouter_generate_content(
+def _parse_fallback_env() -> list[str]:
+    raw = (os.environ.get("AI_MODEL_FALLBACKS") or DEFAULT_AI_MODEL_FALLBACKS).strip()
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def _model_chain(primary: str) -> list[str]:
+    """Primary + fallbacks from env, deduped (case-insensitive order preserved)."""
+    primary = (primary or "").strip()
+    if not primary:
+        primary = DEFAULT_MODEL
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in [primary, *_parse_fallback_env()]:
+        key = m.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(m)
+    return out
+
+
+def _is_retryable_gemini_error(e: BaseException) -> bool:
+    """True for overload / rate limits only (sequential fallback, not generic errors)."""
+    for err in (e, e.__cause__, e.__context__):
+        if err is None:
+            continue
+        if isinstance(err, genai_errors.ClientError):
+            if getattr(err, "code", None) == 429:
+                return True
+        if isinstance(err, genai_errors.ServerError):
+            if getattr(err, "code", None) in (503, 502, 504):
+                return True
+        if isinstance(err, genai_errors.APIError):
+            code = getattr(err, "code", None)
+            if code == 429:
+                return True
+            if isinstance(code, int) and 500 <= code < 600:
+                return True
+            status = str(getattr(err, "status", "") or "")
+            if "RESOURCE_EXHAUSTED" in status.upper() or "UNAVAILABLE" in status.upper():
+                return True
+    msg = str(e).lower()
+    if "429" in msg or "503" in msg or "resource exhausted" in msg:
+        return True
+    if "rate limit" in msg or "too many requests" in msg:
+        return True
+    return False
+
+
+def _gemini_generate_text(
     *,
+    client: genai.Client,
     model: str,
     prompt_body: str,
     with_diff: bool,
 ) -> str:
-    api_key = os.environ.get("AI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "Model uses OpenRouter but AI_API_KEY is not set. "
-            "Set AI_API_KEY in repo .env for OpenRouter models."
-        )
     system_instruction = SYSTEM_PROMPT_WITH_DIFF if with_diff else SYSTEM_PROMPT
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": prompt_body},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 1536 if with_diff else 512,
-    }
-    req = urllib.request.Request(
-        _OPENROUTER_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt_body.strip(),
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.2,
+            max_output_tokens=1536 if with_diff else 512,
+        ),
     )
-    try:
-        with urllib.request.urlopen(req, timeout=35) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenRouter HTTP {e.code}: {err_body}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"OpenRouter request failed: {e}") from e
-    try:
-        parsed = json.loads(body)
-        choices = parsed.get("choices") or []
-        if not choices:
-            raise RuntimeError("OpenRouter response missing choices.")
-        msg = choices[0].get("message") or {}
-        content = msg.get("content")
-        if isinstance(content, list):
-            chunks: list[str] = []
-            for c in content:
-                if isinstance(c, dict):
-                    txt = c.get("text")
-                    if isinstance(txt, str):
-                        chunks.append(txt)
-            content = "\n".join(chunks)
-        if not isinstance(content, str) or not content.strip():
-            raise RuntimeError("OpenRouter response has empty content.")
-        return content.strip()
-    except json.JSONDecodeError as e:
-        raise RuntimeError("OpenRouter response is not valid JSON.") from e
+    return (response.text or "").strip()
 
 
 def suggest_commands(
@@ -559,12 +554,16 @@ def suggest_commands(
     with_diff: bool = False,
     *,
     unified_diff_for_infer: str | None = None,
+    fallback_notifier: Callable[[str], None] | None = None,
 ) -> tuple[Suggestion | None, str]:
     """Call Gemini with the file list (and optionally full diff); return (suggestion, raw_response). suggestion is None if unparseable.
 
     ``unified_diff_for_infer`` optional text (staged+unstaged unified diff) used to
     refine REFACTOR/FEAT into FIX when the diff matches behavior-fix patterns
     (e.g. ``--staged-only``), including when ``with_diff`` is False.
+
+    On 429/503-style errors, tries ``AI_MODEL_FALLBACKS`` (comma-separated) in order.
+    ``fallback_notifier`` is called with the next model id before each retry.
     """
     if not diff or not diff.strip():
         return None, ""
@@ -578,23 +577,35 @@ def suggest_commands(
     if key_err:
         raise RuntimeError(key_err)
     provider = infer_provider_from_model(model)
-    if provider == "openrouter":
-        text = _openrouter_generate_content(
-            model=model, prompt_body=diff.strip(), with_diff=with_diff
+    if provider == "mistral":
+        raise RuntimeError(
+            "Mistral models are not wired up yet. Set AI_MODEL to a Gemini model id."
         )
-    else:
-        system_instruction = SYSTEM_PROMPT_WITH_DIFF if with_diff else SYSTEM_PROMPT
-        client = _get_client()
-        response = client.models.generate_content(
-            model=model,
-            contents=diff.strip(),
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.2,
-                max_output_tokens=1536 if with_diff else 512,
-            ),
-        )
-        text = (response.text or "").strip()
+    client = _get_client()
+    chain = _model_chain(model)
+    text = ""
+    last_err: BaseException | None = None
+    for i, m in enumerate(chain):
+        try:
+            text = _gemini_generate_text(
+                client=client,
+                model=m,
+                prompt_body=diff,
+                with_diff=with_diff,
+            )
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            will_retry = (i + 1 < len(chain)) and _is_retryable_gemini_error(e)
+            if will_retry:
+                nxt = chain[i + 1]
+                if fallback_notifier:
+                    fallback_notifier(nxt)
+                continue
+            raise
+    if last_err is not None:
+        raise last_err
     raw = text
     # Strip markdown code block if present
     if text.startswith("```"):
