@@ -65,14 +65,17 @@ def _gemini_fallback_notifier() -> Callable[[str], None]:
     return _notify
 
 
-def _model_picker_line(num: int, label: str, link_url: str, model_id: str) -> Text:
-    """One OSC 8 link on `label` only; model id in cyan (no markup parsing of `/` or `:`)."""
+def _model_picker_line(
+    num: int, label: str, link_url: str, model_id: str | None = None
+) -> Text:
+    """OSC 8 link on `label`; optional cyan tail in parentheses (e.g. model id)."""
     line = Text()
     line.append(f"  {num}. ")
     line.append(label, style=f"link {link_url}")
-    line.append(" (")
-    line.append(model_id, style="cyan")
-    line.append(")")
+    if model_id:
+        line.append(" (")
+        line.append(model_id, style="cyan")
+        line.append(")")
     return line
 
 
@@ -182,14 +185,7 @@ def _ensure_repo_env_file(repo_env: Path) -> bool:
 def _choose_and_persist_ai_model(repo_env: Path) -> str:
     """Single provider choice for now (Gemini); more providers may be added later."""
     console.print(Text("Choose AI provider for this project:", style="dim"))
-    console.print(
-        _model_picker_line(
-            1,
-            "Gemini",
-            _GOOGLE_AI_API_KEY_URL,
-            f"{DEFAULT_MODEL} — auto fallback if busy",
-        )
-    )
+    console.print(_model_picker_line(1, "Gemini", _GOOGLE_AI_API_KEY_URL))
     typer.prompt("Pick provider (1)", default="1")
     model = DEFAULT_MODEL
     _upsert_env_var(repo_env, "AI_MODEL", model)
