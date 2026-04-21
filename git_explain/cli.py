@@ -16,6 +16,8 @@ from rich.text import Text
 
 from git_explain.gemini import (
     DEFAULT_MODEL,
+    DEFAULT_MISTRAL_MODEL,
+    infer_provider_from_model,
     Suggestion,
     suggest_commands,
 )
@@ -38,10 +40,13 @@ _DIFF_INFER_MAX_CHARS = 50_000
 _AI_ENV_KEYS = (
     "AI_MODEL",
     "AI_API_KEY",
+    "GEMINI_API_KEY",
+    "MISTRAL_API_KEY",
     "AI_MODEL_FALLBACKS",
 )
-# Terminal hyperlinks (OSC 8) for first-run model picker — Ctrl+click in supported terminals.
+# Terminal hyperlinks (OSC 8) for first-run provider picker — Ctrl+click in supported terminals.
 _GOOGLE_AI_API_KEY_URL = "https://aistudio.google.com/apikey"
+_MISTRAL_API_KEYS_URL = "https://admin.mistral.ai/organization/api-keys"
 
 
 def _gemini_fallback_notifier() -> Callable[[str], None]:
@@ -183,13 +188,17 @@ def _ensure_repo_env_file(repo_env: Path) -> bool:
 
 
 def _choose_and_persist_ai_model(repo_env: Path) -> str:
-    """Single provider choice for now (Gemini); more providers may be added later."""
+    """Gemini (Google AI Studio) or Mistral (La Plateforme); sets ``AI_MODEL`` and expected API key env."""
     console.print(Text("Choose AI provider for this project:", style="dim"))
     console.print(_model_picker_line(1, "Gemini", _GOOGLE_AI_API_KEY_URL))
-    typer.prompt("Pick provider (1)", default="1")
-    model = DEFAULT_MODEL
+    console.print(_model_picker_line(2, "Mistral", _MISTRAL_API_KEYS_URL))
+    choice = typer.prompt("Pick provider (1 or 2)", default="1").strip()
+    model = DEFAULT_MISTRAL_MODEL if choice == "2" else DEFAULT_MODEL
     _upsert_env_var(repo_env, "AI_MODEL", model)
     os.environ["AI_MODEL"] = model
+    # Pick up AI_API_KEY / GEMINI_API_KEY / MISTRAL_API_KEY if the user added them to .env while using the links above.
+    if repo_env.is_file():
+        _load_ai_env_from_dotenv(repo_env)
     return model
 
 
@@ -608,7 +617,12 @@ def run(
             ai_fallback_notes.append(("", fb))
 
     if ai_model and ai_fallback_notes:
-        key_help = "Check AI_API_KEY, AI_MODEL, quota/model availability, and network."
+        p = infer_provider_from_model(ai_model)
+        key_help = (
+            "Check AI_API_KEY, AI_MODEL, quota, and network."
+            if p == "mistral"
+            else "Check AI_API_KEY, AI_MODEL, AI_MODEL_FALLBACKS, quota/model availability, and network."
+        )
         lines = [
             "[bold]Configured AI was not used for the suggestion below.[/bold]",
             "Commit message(s) come from [bold]local heuristics[/bold] instead.",
