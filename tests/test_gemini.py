@@ -83,13 +83,41 @@ def test_infer_provider_from_model_patterns() -> None:
     assert infer_provider_from_model("gemini-2.5-flash") == "gemini"
     assert infer_provider_from_model("qwen/qwen3-coder:free") == "gemini"
     assert infer_provider_from_model("mistral-large-latest") == "mistral"
+    assert infer_provider_from_model("codestral-latest") == "mistral"
 
 
 def test_get_ai_key_error_requires_api_key(monkeypatch) -> None:
     monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     err = get_ai_key_error("gemini-2.5-flash")
     assert err is not None
     assert "AI_API_KEY" in err
+
+
+def test_get_ai_key_error_gemini_ok_with_gemini_api_key_only(monkeypatch) -> None:
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    assert get_ai_key_error("gemini-2.5-flash") is None
+
+
+def test_get_ai_key_error_requires_mistral_key(monkeypatch) -> None:
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    err = get_ai_key_error("codestral-latest")
+    assert err is not None
+    assert "AI_API_KEY" in err
+
+
+def test_get_ai_key_error_mistral_ok_with_ai_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    monkeypatch.setenv("AI_API_KEY", "test-key")
+    assert get_ai_key_error("codestral-latest") is None
+
+
+def test_get_ai_key_error_mistral_legacy_mistral_env_var(monkeypatch) -> None:
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    assert get_ai_key_error("codestral-latest") is None
 
 
 def test_model_chain_dedupes_primary_from_fallbacks(monkeypatch) -> None:
@@ -103,10 +131,19 @@ def test_model_chain_dedupes_primary_from_fallbacks(monkeypatch) -> None:
     ]
 
 
+def test_model_chain_mistral_is_primary_only_even_if_fallbacks_in_env(
+    monkeypatch,
+) -> None:
+    """Mistral uses a single model; AI_MODEL_FALLBACKS is ignored."""
+    from git_explain.gemini import DEFAULT_MISTRAL_MODEL
+
+    monkeypatch.setenv("AI_MODEL_FALLBACKS", "open-mistral-7b,mistral-small-latest")
+    c = _model_chain(DEFAULT_MISTRAL_MODEL)
+    assert c == [DEFAULT_MISTRAL_MODEL]
+
+
 def test_is_retryable_gemini_error_429() -> None:
-    err = genai_errors.ClientError(
-        429, {"error": {"message": "rate"}}, None
-    )
+    err = genai_errors.ClientError(429, {"error": {"message": "rate"}}, None)
     assert _is_retryable_gemini_error(err) is True
 
 
