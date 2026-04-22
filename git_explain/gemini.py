@@ -1,10 +1,7 @@
-"""Suggest git add and commit from AI (Gemini or Mistral API)."""
+"""Suggest git add and commit from the Google Gemini API."""
 
-import json
 import os
 import re
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -117,10 +114,6 @@ _COMMIT_LINE_BRACKET_RE = re.compile(
 DEFAULT_MODEL = "gemini-2.5-flash"
 # Tried in order after AI_MODEL when primary hits rate limits / overload (comma-separated in .env).
 DEFAULT_AI_MODEL_FALLBACKS = "gemini-2.5-flash-lite,gemini-3-flash-preview"
-
-DEFAULT_MISTRAL_MODEL = "codestral-latest"
-
-_MISTRAL_CHAT_URL = "https://api.mistral.ai/v1/chat/completions"
 
 
 def _normalize_type(t: str) -> str:
@@ -477,37 +470,14 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
-def infer_provider_from_model(model: str) -> str:
-    """Infer provider: ``mistral*`` / ``codestral*`` → Mistral API, else Gemini."""
-    m = (model or "").strip().lower()
-    if m.startswith("mistral") or m.startswith("codestral"):
-        return "mistral"
-    return "gemini"
-
-
-def _mistral_api_key() -> str | None:
-    """Same ``AI_API_KEY`` as Gemini; ``MISTRAL_API_KEY`` is legacy fallback."""
-    return os.environ.get("AI_API_KEY") or os.environ.get("MISTRAL_API_KEY")
-
-
-def get_ai_key_error(model: str) -> str | None:
-    p = infer_provider_from_model(model)
-    if p == "mistral":
-        if not _mistral_api_key():
-            return (
-                "Set AI_API_KEY in environment "
-                "(create a Mistral key at https://admin.mistral.ai/organization/api-keys)."
-            )
-        return None
+def get_ai_key_error(_model: str) -> str | None:
     if not _gemini_api_key():
         return "Set AI_API_KEY in environment."
     return None
 
 
-def _parse_fallback_env(primary: str) -> list[str]:
-    """Gemini: primary + optional ``AI_MODEL_FALLBACKS`` (or built-in defaults). Mistral: no fallbacks."""
-    if infer_provider_from_model(primary) == "mistral":
-        return []
+def _parse_fallback_env(_primary: str) -> list[str]:
+    """Optional ``AI_MODEL_FALLBACKS`` (or built-in defaults) as extra models to try."""
     raw = (os.environ.get("AI_MODEL_FALLBACKS") or DEFAULT_AI_MODEL_FALLBACKS).strip()
     return [x.strip() for x in raw.split(",") if x.strip()]
 
@@ -559,77 +529,6 @@ def _is_retryable_gemini_error(e: BaseException) -> bool:
     return False
 
 
-def _is_retryable_mistral_error(e: BaseException) -> bool:
-    """429/5xx from Mistral HTTP API."""
-    if isinstance(e, urllib.error.HTTPError):
-        return e.code in (429, 503, 502, 504)
-    msg = str(e).lower()
-    if "mistral http 429" in msg or "mistral http 503" in msg:
-        return True
-    if "429" in msg or "503" in msg or "502" in msg or "504" in msg:
-        if "mistral" in msg or "http" in msg:
-            return True
-    if "rate limit" in msg or "too many requests" in msg:
-        return True
-    return False
-
-
-def _is_retryable_for_provider(provider: str, e: BaseException) -> bool:
-    if provider == "mistral":
-        return _is_retryable_mistral_error(e)
-    return _is_retryable_gemini_error(e)
-
-
-def _mistral_generate_text(
-    *,
-    model: str,
-    prompt_body: str,
-    with_diff: bool,
-) -> str:
-    api_key = _mistral_api_key()
-    if not api_key:
-        raise RuntimeError("Set AI_API_KEY in environment.")
-    system_instruction = SYSTEM_PROMPT_WITH_DIFF if with_diff else SYSTEM_PROMPT
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": prompt_body.strip()},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 1536 if with_diff else 512,
-    }
-    req = urllib.request.Request(
-        _MISTRAL_CHAT_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Mistral HTTP {e.code}: {err_body}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"Mistral request failed: {e}") from e
-    try:
-        parsed = json.loads(body)
-        choices = parsed.get("choices") or []
-        if not choices:
-            raise RuntimeError("Mistral response missing choices.")
-        msg = choices[0].get("message") or {}
-        content = msg.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise RuntimeError("Mistral response has empty content.")
-        return content.strip()
-    except json.JSONDecodeError as e:
-        raise RuntimeError("Mistral response is not valid JSON.") from e
-
-
 def _gemini_generate_text(
     *,
     client: genai.Client,
@@ -658,15 +557,14 @@ def suggest_commands(
     unified_diff_for_infer: str | None = None,
     fallback_notifier: Callable[[str], None] | None = None,
 ) -> tuple[Suggestion | None, str]:
-    """Call Gemini or Mistral with the file list (and optionally full diff).
+    """Call Gemini with the file list (and optionally full diff).
 
     ``unified_diff_for_infer`` optional text (staged+unstaged unified diff) used to
     refine REFACTOR/FEAT into FIX when the diff matches behavior-fix patterns
     (e.g. ``--staged-only``), including when ``with_diff`` is False.
 
-    On 429/503-style errors, Gemini tries ``AI_MODEL_FALLBACKS`` (comma-separated)
-    in order; Mistral uses one model only (no fallbacks). ``fallback_notifier`` is
-    called with the next model id before each Gemini retry.
+    On 429/503-style errors, tries ``AI_MODEL_FALLBACKS`` (comma-separated) in order.
+    ``fallback_notifier`` is called with the next model id before each retry.
     """
     if not diff or not diff.strip():
         return None, ""
@@ -679,34 +577,23 @@ def suggest_commands(
     key_err = get_ai_key_error(model)
     if key_err:
         raise RuntimeError(key_err)
-    provider = infer_provider_from_model(model)
     chain = _model_chain(model)
     text = ""
     last_err: BaseException | None = None
-    client: genai.Client | None = _get_client() if provider == "gemini" else None
+    client = _get_client()
     for i, m in enumerate(chain):
         try:
-            if provider == "mistral":
-                text = _mistral_generate_text(
-                    model=m,
-                    prompt_body=diff,
-                    with_diff=with_diff,
-                )
-            else:
-                assert client is not None
-                text = _gemini_generate_text(
-                    client=client,
-                    model=m,
-                    prompt_body=diff,
-                    with_diff=with_diff,
-                )
+            text = _gemini_generate_text(
+                client=client,
+                model=m,
+                prompt_body=diff,
+                with_diff=with_diff,
+            )
             last_err = None
             break
         except Exception as e:
             last_err = e
-            will_retry = (i + 1 < len(chain)) and _is_retryable_for_provider(
-                provider, e
-            )
+            will_retry = (i + 1 < len(chain)) and _is_retryable_gemini_error(e)
             if will_retry:
                 nxt = chain[i + 1]
                 if fallback_notifier:
