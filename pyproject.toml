@@ -11,6 +11,7 @@ dynamic = ["version"]
 license = "MIT"
 authors = [
   { name = "nazarli-shabnam" },
+  { email = "shabnamnezerli@gmail.com" },
 ]
 keywords = ["git", "cli", "commit", "ai", "gemini"]
 classifiers = [
