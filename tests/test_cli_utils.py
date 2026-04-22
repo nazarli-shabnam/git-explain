@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from git_explain.gemini import DEFAULT_MODEL, DEFAULT_MISTRAL_MODEL
+from git_explain.gemini import DEFAULT_MODEL
 from git_explain.cli import (
     _choose_and_persist_ai_model,
     _ensure_repo_env_file,
@@ -269,17 +269,8 @@ def test_resolve_project_ai_model_uses_override(tmp_path) -> None:
     assert m == "gemini-2.5-flash-lite"
 
 
-def test_choose_and_persist_ai_model_default_is_gemini(tmp_path, monkeypatch) -> None:
+def test_choose_and_persist_ai_model_default_is_gemini(tmp_path) -> None:
     env_file = tmp_path / ".env"
-    monkeypatch.setattr("typer.prompt", lambda *a, **k: "1")
     model = _choose_and_persist_ai_model(env_file)
     assert model == DEFAULT_MODEL
     assert "AI_MODEL=gemini-2.5-flash" in env_file.read_text(encoding="utf-8")
-
-
-def test_choose_and_persist_ai_model_mistral(tmp_path, monkeypatch) -> None:
-    env_file = tmp_path / ".env"
-    monkeypatch.setattr("typer.prompt", lambda *a, **k: "2")
-    model = _choose_and_persist_ai_model(env_file)
-    assert model == DEFAULT_MISTRAL_MODEL
-    assert f"AI_MODEL={DEFAULT_MISTRAL_MODEL}" in env_file.read_text(encoding="utf-8")

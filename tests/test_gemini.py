@@ -9,7 +9,6 @@ from git_explain.gemini import (
     _model_chain,
     _normalize_type,
     get_ai_key_error,
-    infer_provider_from_model,
     truncate_commit_subject,
 )
 
@@ -79,13 +78,6 @@ def test_normalize_type_converts_tests_to_test() -> None:
     assert _normalize_type("unknown") == "CHORE"
 
 
-def test_infer_provider_from_model_patterns() -> None:
-    assert infer_provider_from_model("gemini-2.5-flash") == "gemini"
-    assert infer_provider_from_model("qwen/qwen3-coder:free") == "gemini"
-    assert infer_provider_from_model("mistral-large-latest") == "mistral"
-    assert infer_provider_from_model("codestral-latest") == "mistral"
-
-
 def test_get_ai_key_error_requires_api_key(monkeypatch) -> None:
     monkeypatch.delenv("AI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -100,24 +92,12 @@ def test_get_ai_key_error_gemini_ok_with_gemini_api_key_only(monkeypatch) -> Non
     assert get_ai_key_error("gemini-2.5-flash") is None
 
 
-def test_get_ai_key_error_requires_mistral_key(monkeypatch) -> None:
+def test_get_ai_key_error_ignores_model_id_for_key_check(monkeypatch) -> None:
+    """Any model id uses the same Gemini API keys."""
     monkeypatch.delenv("AI_API_KEY", raising=False)
-    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
-    err = get_ai_key_error("codestral-latest")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    err = get_ai_key_error("any-model-id")
     assert err is not None
-    assert "AI_API_KEY" in err
-
-
-def test_get_ai_key_error_mistral_ok_with_ai_api_key(monkeypatch) -> None:
-    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
-    monkeypatch.setenv("AI_API_KEY", "test-key")
-    assert get_ai_key_error("codestral-latest") is None
-
-
-def test_get_ai_key_error_mistral_legacy_mistral_env_var(monkeypatch) -> None:
-    monkeypatch.delenv("AI_API_KEY", raising=False)
-    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
-    assert get_ai_key_error("codestral-latest") is None
 
 
 def test_model_chain_dedupes_primary_from_fallbacks(monkeypatch) -> None:
@@ -131,15 +111,12 @@ def test_model_chain_dedupes_primary_from_fallbacks(monkeypatch) -> None:
     ]
 
 
-def test_model_chain_mistral_is_primary_only_even_if_fallbacks_in_env(
+def test_model_chain_includes_fallbacks_for_non_default_primary(
     monkeypatch,
 ) -> None:
-    """Mistral uses a single model; AI_MODEL_FALLBACKS is ignored."""
-    from git_explain.gemini import DEFAULT_MISTRAL_MODEL
-
-    monkeypatch.setenv("AI_MODEL_FALLBACKS", "open-mistral-7b,mistral-small-latest")
-    c = _model_chain(DEFAULT_MISTRAL_MODEL)
-    assert c == [DEFAULT_MISTRAL_MODEL]
+    monkeypatch.setenv("AI_MODEL_FALLBACKS", "gemini-2.5-flash-lite")
+    c = _model_chain("gemini-2.5-pro")
+    assert c == ["gemini-2.5-pro", "gemini-2.5-flash-lite"]
 
 
 def test_is_retryable_gemini_error_429() -> None:
