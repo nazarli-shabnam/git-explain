@@ -2,12 +2,17 @@ import os
 
 import pytest
 
+from git_explain.gemini import DEFAULT_MODEL
 from git_explain.cli import (
+    _choose_and_persist_ai_model,
+    _ensure_repo_env_file,
     _group_changes,
     _load_ai_env_from_dotenv,
     _parse_combined,
     _parse_selection,
     _ps_quote,
+    _resolve_project_ai_model,
+    _upsert_env_var,
     _validate_suggest_flags,
 )
 
@@ -167,9 +172,18 @@ def test_validate_suggest_flags_allows_suggest_alone() -> None:
     _validate_suggest_flags(
         suggest=True,
         auto=False,
-        ai=False,
         staged_only=False,
         model=None,
+        with_diff=False,
+    )
+
+
+def test_validate_suggest_flags_allows_model_override() -> None:
+    _validate_suggest_flags(
+        suggest=True,
+        auto=False,
+        staged_only=False,
+        model="gemini-2.5-flash-lite",
         with_diff=False,
     )
 
@@ -179,9 +193,8 @@ def test_validate_suggest_flags_rejects_combined_flags() -> None:
         _validate_suggest_flags(
             suggest=True,
             auto=True,
-            ai=True,
             staged_only=False,
-            model="gemini-2.5-flash",
+            model=None,
             with_diff=False,
         )
     assert "--suggest is a dedicated mode" in str(ex.value)
@@ -190,54 +203,74 @@ def test_validate_suggest_flags_rejects_combined_flags() -> None:
 def test_load_ai_env_from_dotenv_only_sets_ai_keys(tmp_path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "GEMINI_API_KEY=from-file\n"
-        "GOOGLE_API_KEY=from-google\n"
-        "GEMINI_MODEL=gemini-model\n"
-        "PATH=should-not-touch\n",
+        "AI_API_KEY=from-file\nAI_MODEL=gemini-2.5-flash\nPATH=should-not-touch\n",
         encoding="utf-8",
     )
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_MODEL", raising=False)
     monkeypatch.setenv("PATH", "existing-path")
 
     _load_ai_env_from_dotenv(env_file)
 
-    assert os.environ.get("GEMINI_API_KEY") == "from-file"
-    assert os.environ.get("GOOGLE_API_KEY") == "from-google"
-    assert os.environ.get("GEMINI_MODEL") == "gemini-model"
+    assert os.environ.get("AI_API_KEY") == "from-file"
+    assert os.environ.get("AI_MODEL") == "gemini-2.5-flash"
     assert os.environ.get("PATH") == "existing-path"
 
 
 def test_load_ai_env_from_dotenv_overrides_existing(tmp_path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "GEMINI_API_KEY=from-file\nGOOGLE_API_KEY=from-file\nGEMINI_MODEL=from-file\n",
+        "AI_API_KEY=from-file\nAI_MODEL=from-file\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("GEMINI_API_KEY", "existing-gemini")
-    monkeypatch.setenv("GOOGLE_API_KEY", "existing-google")
-    monkeypatch.setenv("GEMINI_MODEL", "existing-model")
+    monkeypatch.setenv("AI_API_KEY", "existing-key")
+    monkeypatch.setenv("AI_MODEL", "existing-model")
 
     _load_ai_env_from_dotenv(env_file)
 
-    assert os.environ.get("GEMINI_API_KEY") == "from-file"
-    assert os.environ.get("GOOGLE_API_KEY") == "from-file"
-    assert os.environ.get("GEMINI_MODEL") == "from-file"
+    assert os.environ.get("AI_API_KEY") == "from-file"
+    assert os.environ.get("AI_MODEL") == "from-file"
 
 
 def test_load_ai_env_from_dotenv_ignores_empty_values(tmp_path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "GEMINI_API_KEY=\nGOOGLE_API_KEY=   \nGEMINI_MODEL=\n",
+        "AI_API_KEY=\nAI_MODEL=\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("GEMINI_API_KEY", "existing-gemini")
-    monkeypatch.setenv("GOOGLE_API_KEY", "existing-google")
-    monkeypatch.setenv("GEMINI_MODEL", "existing-model")
+    monkeypatch.setenv("AI_API_KEY", "existing-key")
+    monkeypatch.setenv("AI_MODEL", "existing-model")
 
     _load_ai_env_from_dotenv(env_file)
 
-    assert os.environ.get("GEMINI_API_KEY") == "existing-gemini"
-    assert os.environ.get("GOOGLE_API_KEY") == "existing-google"
-    assert os.environ.get("GEMINI_MODEL") == "existing-model"
+    assert os.environ.get("AI_API_KEY") == "existing-key"
+    assert os.environ.get("AI_MODEL") == "existing-model"
+
+
+def test_upsert_env_var_appends_and_updates(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    _upsert_env_var(env_file, "AI_MODEL", DEFAULT_MODEL)
+    _upsert_env_var(env_file, "AI_MODEL", "gemini-2.5-flash-lite")
+    text = env_file.read_text(encoding="utf-8")
+    assert "AI_MODEL=gemini-2.5-flash-lite" in text
+    assert text.count("AI_MODEL=") == 1
+
+
+def test_ensure_repo_env_file_respects_no_choice(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr("typer.prompt", lambda *a, **k: "n")
+    assert _ensure_repo_env_file(env_file) is False
+    assert not env_file.exists()
+
+
+def test_resolve_project_ai_model_uses_override(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    m = _resolve_project_ai_model(env_file, "gemini-2.5-flash-lite")
+    assert m == "gemini-2.5-flash-lite"
+
+
+def test_choose_and_persist_ai_model_default_is_gemini(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    model = _choose_and_persist_ai_model(env_file)
+    assert model == DEFAULT_MODEL
+    assert "AI_MODEL=gemini-2.5-flash" in env_file.read_text(encoding="utf-8")

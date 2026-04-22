@@ -1,6 +1,6 @@
 # git-explain
 
-Suggest **conventional** `git add` / `git commit` messages from your changes. **Local heuristics by default** (no network); add **`--ai`** for Google Gemini.
+Suggests **conventional** `git add` / `git commit` messages from your changes. Uses AI when you configure a key; otherwise uses simple local rules.
 
 [![PyPI](https://img.shields.io/pypi/v/git-explain.svg?label=pypi)](https://pypi.org/project/git-explain/)
 [![GitHub tag](https://img.shields.io/github/v/tag/nazarli-shabnam/git-explain?label=repo)](https://github.com/nazarli-shabnam/git-explain/tags)
@@ -8,52 +8,84 @@ Suggest **conventional** `git add` / `git commit` messages from your changes. **
 
 ---
 
-## Install & run
+## Install and upgrade
 
 ```bash
 pip install git-explain
-cd /path/to/your/git/repo   # repo with local changes
+pip install --upgrade git-explain
+```
+
+Use the second command anytime you want the latest release from PyPI.
+
+In a terminal, go to your project folder (the one that contains `.git`) and run:
+
+```bash
 git-explain
 ```
 
-**Using `--ai`?** Put **`GEMINI_API_KEY=…`** (or **`GOOGLE_API_KEY`**) in a **`.env` file at your project’s git root** — the top of the repo you’re working in, not the folder where `git-explain` is installed.
-
-**Enter** applies the suggested commands; **n** skips (copy only). Pin a release from GitHub:  
-`pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v2.3.0"` (swap the tag as needed).
+The first time you run it without `AI_MODEL` in `.env`, the tool can create `.env` with a default Gemini model and a link to create an API key.
 
 ---
 
-## Flags, keys, and AI
+## Configure (`.env`)
+
+Put a file named **`.env` in the repo root** (next to `.git`). Typical variables:
+
+| Variable | Role |
+|----------|------|
+| `AI_MODEL` | Gemini model id, e.g. `gemini-2.5-flash`. Set on first run if missing. |
+| `AI_API_KEY` | From [Google AI Studio](https://aistudio.google.com/apikey). |
+| `AI_MODEL_FALLBACKS` | Optional: comma-separated backup models, tried **in order** after `AI_MODEL` on retryable busy/rate-limit errors. If you omit this variable, the tool uses the **default fallbacks** below. |
+
+**Default `AI_MODEL_FALLBACKS` (when the variable is unset):** `gemini-2.5-flash-lite`, then `gemini-3-flash-preview` — each is tried in sequence after a failed attempt on the previous model in the chain (starting from `AI_MODEL`).
+
+If `AI_API_KEY` is empty, **`GEMINI_API_KEY`** is still read (same key, older name).
+
+---
+
+## Flags
 
 | | |
 |--|--|
-| **Conventional commits** | `feat:`, `fix:`, optional `(scope)`, etc. — see [spec](https://www.conventionalcommits.org/). |
-| **`.env`** | `GEMINI_API_KEY` or `GOOGLE_API_KEY` in **`.env` at that repo’s git root** (loaded after the repo is resolved). |
-| **Shell (one session)** | Set the variable in the terminal; it overrides `.env` for that window. PowerShell: `$env:GEMINI_API_KEY="…"` then `git-explain --ai`. bash/zsh: `export GEMINI_API_KEY="…"`. |
-| **`--auto`** | Apply without the apply prompt. |
-| **`--staged-only`** | Commit the index only (no `git add` from the tool). |
-| **`--cwd`** | Treat another directory as the git repo root. |
+| `--auto` | Apply suggested commands without a confirmation prompt. |
+| `--staged-only` | Work with staged changes only (no `git add` from the tool). |
+| `--cwd` | Use another directory as the git repo root. |
+| `--with-diff` | Send the full diff to the AI (more context). |
+| `--suggest` | Print one suggested `git commit -m "…"` line (staged, AI only). |
 
-**`--ai`** — model sees paths + status. **`--ai --with-diff`** — also sends the diff (more detail, data goes to the API). **`--suggest`** — staged + AI only: prints one `git commit -m "…"` line (no other flags). More: **`git-explain --help`**.
+If you pick **more than one changed file**, you can choose **one** commit or **split** into several (split is not available with `--staged-only`). **Enter** applies the suggestion; **n** skips so you can copy instead.
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, optional scope, etc.).
 
 ---
 
-## If Gemini errors
+## When AI fails
 
-- **429 / quota** — [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits).
-- **404 / model** — e.g. **`GEMINI_MODEL=gemini-2.5-flash`**; [model list](https://ai.google.dev/api/models).
+Wrong key, bad model name, network issues, or quota errors → the tool falls back to local heuristics and shows a warning. On retryable busy/rate-limit errors it steps through the fallback chain: your `AI_MODEL` first, then the models in `AI_MODEL_FALLBACKS` (or the **default** `gemini-2.5-flash-lite` → `gemini-3-flash-preview` list if that variable is unset).
+
+---
+
+## Install a specific version from GitHub
+
+```bash
+pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v2.3.0"
+pip install "git+https://github.com/nazarli-shabnam/git-explain.git@v2.4.0"
+```
+
+Replace `v2.3.0` with the [tag](https://github.com/nazarli-shabnam/git-explain/tags) you want.
 
 ---
 
 ## Develop
 
-**Smoke-test a branch:** clone, `pip install -r requirements.txt`, run **`python -m git_explain`** from any git working tree (no `pip install -e .`). **Day-to-day hacking:** `pip install -e ".[dev]"` then `pytest -q`, `ruff check .`, `ruff format --check .`.
+From a clone of this repo:
 
 ```bash
-cd path/to/git-explain
 pip install -r requirements.txt
 python -m git_explain
 ```
+
+Contributors: `pip install -e ".[dev]"` then `pytest -q`, `ruff check .`, `ruff format --check .`.
 
 ## GitAds Sponsored
 [![Sponsored by GitAds](https://gitads.dev/v1/ad-serve?source=nazarli-shabnam/git-explain@github)](https://gitads.dev/v1/ad-track?source=nazarli-shabnam/git-explain@github)

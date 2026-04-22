@@ -5,6 +5,7 @@ import re
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
+from collections.abc import Callable
 from typing import Iterable
 
 import typer
@@ -13,10 +14,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from git_explain.gemini import (
-    Suggestion,
-    suggest_commands,
-)
+from git_explain.gemini import DEFAULT_MODEL, Suggestion, suggest_commands
 from git_explain.heuristics import suggest_from_changes
 from git_explain.git import (
     get_combined_diff,
@@ -33,7 +31,56 @@ app = typer.Typer()
 console = Console()
 
 _DIFF_INFER_MAX_CHARS = 50_000
-_AI_ENV_KEYS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_MODEL")
+_AI_ENV_KEYS = (
+    "AI_MODEL",
+    "AI_API_KEY",
+    "GEMINI_API_KEY",
+    "AI_MODEL_FALLBACKS",
+)
+# Terminal hyperlinks (OSC 8) for first-run setup — Ctrl+click in supported terminals.
+_GOOGLE_AI_API_KEY_URL = "https://aistudio.google.com/apikey"
+
+
+def _gemini_fallback_notifier(
+    group_label: str | None = None,
+) -> Callable[[str], None]:
+    """Dim one-line notices when switching models after rate limits / overload.
+
+    ``group_label`` prefixes the line in split-commit mode (one AI call per group),
+    so repeated "primary busy" messages are distinguishable.
+    """
+    first: list[bool] = [True]
+    prefix = f"{group_label}: " if group_label else ""
+
+    def _notify(next_model: str) -> None:
+        if first[0]:
+            console.print(
+                Text(
+                    f"{prefix}Primary model busy; trying fallback: {next_model}",
+                    style="dim",
+                )
+            )
+            first[0] = False
+        else:
+            console.print(
+                Text(f"{prefix}Model busy; trying fallback: {next_model}", style="dim")
+            )
+
+    return _notify
+
+
+def _model_picker_line(
+    num: int, label: str, link_url: str, model_id: str | None = None
+) -> Text:
+    """OSC 8 link on `label`; optional cyan tail in parentheses (e.g. model id)."""
+    line = Text()
+    line.append(f"  {num}. ")
+    line.append(label, style=f"link {link_url}")
+    if model_id:
+        line.append(" (")
+        line.append(model_id, style="cyan")
+        line.append(")")
+    return line
 
 
 @dataclass(frozen=True)
@@ -103,6 +150,75 @@ def _load_ai_env_from_dotenv(dotenv_path: Path) -> None:
         val = str(raw).strip()
         if val:
             os.environ[key] = val
+
+
+def _upsert_env_var(dotenv_path: Path, key: str, value: str) -> None:
+    lines: list[str] = []
+    if dotenv_path.exists():
+        lines = dotenv_path.read_text(encoding="utf-8").splitlines()
+    replaced = False
+    out: list[str] = []
+    prefix = key + "="
+    for ln in lines:
+        if ln.startswith(prefix):
+            out.append(f"{key}={value}")
+            replaced = True
+        else:
+            out.append(ln)
+    if not replaced:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"{key}={value}")
+    dotenv_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def _ensure_repo_env_file(repo_env: Path) -> bool:
+    if repo_env.is_file():
+        return True
+    create = (
+        typer.prompt("No .env found. Create one now? (y/n)", default="y")
+        .strip()
+        .lower()
+    )
+    if create not in ("y", "yes"):
+        return False
+    repo_env.write_text("", encoding="utf-8")
+    return True
+
+
+def _choose_and_persist_ai_model(repo_env: Path) -> str:
+    """First run: set default Gemini model and reload .env for API keys."""
+    console.print(
+        Text(
+            "Add your API key to .env (create one in Google AI Studio if needed):",
+            style="dim",
+        )
+    )
+    console.print(
+        _model_picker_line(
+            1,
+            "Google AI Studio",
+            _GOOGLE_AI_API_KEY_URL,
+            model_id=DEFAULT_MODEL,
+        )
+    )
+    model = DEFAULT_MODEL
+    _upsert_env_var(repo_env, "AI_MODEL", model)
+    os.environ["AI_MODEL"] = model
+    if repo_env.is_file():
+        _load_ai_env_from_dotenv(repo_env)
+    return model
+
+
+def _resolve_project_ai_model(repo_env: Path, model_override: str | None) -> str | None:
+    if model_override:
+        return model_override
+    model = (os.environ.get("AI_MODEL") or "").strip()
+    if model:
+        return model
+    if not _ensure_repo_env_file(repo_env):
+        return None
+    return _choose_and_persist_ai_model(repo_env)
 
 
 def _render_combined(
@@ -215,7 +331,6 @@ def _validate_suggest_flags(
     *,
     suggest: bool,
     auto: bool,
-    ai: bool,
     staged_only: bool,
     model: str | None,
     with_diff: bool,
@@ -225,14 +340,10 @@ def _validate_suggest_flags(
     bad: list[str] = []
     if auto:
         bad.append("--auto")
-    if ai:
-        bad.append("--ai")
     if staged_only:
         bad.append("--staged-only")
     if with_diff:
         bad.append("--with-diff")
-    if model is not None:
-        bad.append("--model")
     if bad:
         raise typer.BadParameter(
             "--suggest is a dedicated mode and cannot be combined with: "
@@ -246,9 +357,6 @@ def main(
     auto: bool = typer.Option(
         False, "--auto", help="Apply suggestion without prompting"
     ),
-    ai: bool = typer.Option(
-        False, "--ai", help="Use Gemini to suggest commit message (default: off)"
-    ),
     staged_only: bool = typer.Option(
         False,
         "--staged-only",
@@ -260,15 +368,12 @@ def main(
     model: str | None = typer.Option(
         None,
         "--model",
-        help=(
-            "Override Gemini model name for --ai "
-            "(defaults to GEMINI_MODEL env var or internal default)."
-        ),
+        help="Override AI model for this run (defaults to AI_MODEL from repo .env).",
     ),
     with_diff: bool = typer.Option(
         False,
         "--with-diff",
-        help="With --ai: send full diff to the model for detailed, specific commit messages (opt-in).",
+        help="Send full diff to the configured AI model for more specific messages (opt-in).",
     ),
     suggest: bool = typer.Option(
         False,
@@ -281,7 +386,6 @@ def main(
     _validate_suggest_flags(
         suggest=suggest,
         auto=auto,
-        ai=ai,
         staged_only=staged_only,
         model=model,
         with_diff=with_diff,
@@ -289,7 +393,6 @@ def main(
     run(
         cwd=Path(cwd) if cwd else None,
         auto=auto,
-        ai=ai,
         staged_only=staged_only,
         model=model,
         with_diff=with_diff,
@@ -300,23 +403,12 @@ def main(
 def run(
     cwd: Path | None = None,
     auto: bool = False,
-    ai: bool = False,
     staged_only: bool = False,
     model: str | None = None,
     with_diff: bool = False,
     suggest: bool = False,
 ) -> None:
     console.print(Text("git-explain", style="bold"))
-    if with_diff and not ai:
-        console.print(
-            "[yellow]Warning:[/yellow] --with-diff has no effect without --ai. "
-            "It only affects AI-generated commit messages."
-        )
-        enable = typer.prompt("Enable AI? (y/n)", default="n").strip().lower()
-        if enable in ("y", "yes"):
-            ai = True
-        else:
-            with_diff = False
 
     try:
         combined, repo_root = get_combined_diff(cwd=cwd)
@@ -331,6 +423,9 @@ def run(
     if not combined.strip():
         console.print("[yellow]No staged, unstaged, or untracked changes.[/yellow]")
         return
+    ai_model = _resolve_project_ai_model(repo_env, model)
+    if repo_env.is_file():
+        _load_ai_env_from_dotenv(repo_env)
     has_commits, changes = _parse_combined(combined)
     console.print(Panel(combined, title="Changed files", border_style="dim"))
 
@@ -353,12 +448,19 @@ def run(
             if len(staged_diff) > _DIFF_INFER_MAX_CHARS
             else staged_diff
         )
+        if not ai_model:
+            console.print(
+                "[red]Error:[/red] --suggest requires an AI model. "
+                "Set AI_MODEL in repo .env or pass --model."
+            )
+            raise typer.Exit(1)
         try:
             sug, _raw = suggest_commands(
                 payload,
-                model=None,
+                model=ai_model,
                 with_diff=bool(staged_diff),
                 unified_diff_for_infer=infer_diff,
+                fallback_notifier=_gemini_fallback_notifier(),
             )
             if sug is None:
                 raise RuntimeError("Could not parse AI suggestion.")
@@ -457,7 +559,7 @@ def run(
                     else raw_d
                 )
 
-        if ai:
+        if ai_model:
             payload = _render_combined(has_commits, change_items, title=title)
             if with_diff:
                 paths_for_diff = [p for _, p in change_items]
@@ -465,11 +567,13 @@ def run(
                 if diff_text:
                     payload = payload + "\n\n## Diff\n" + diff_text
             try:
+                fb_label = title if mode == "split" else None
                 sug, _raw = suggest_commands(
                     payload,
-                    model=model,
+                    model=ai_model,
                     with_diff=with_diff,
                     unified_diff_for_infer=infer_diff,
+                    fallback_notifier=_gemini_fallback_notifier(fb_label),
                 )
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
@@ -489,24 +593,52 @@ def run(
         return h, None
 
     selected_pairs = [(ch.status, ch.path) for ch in selected]
+    unique_paths = {p for _, p in selected_pairs}
+
+    mode = "one"
+    if len(unique_paths) > 1:
+        if staged_only:
+            console.print(
+                "[dim]Note:[/dim] split commits are not available with --staged-only: "
+                "each commit would need its own staging, but this mode skips git add. "
+                "Using a single commit for everything currently staged."
+            )
+        else:
+            mode_input = (
+                typer.prompt("Commit mode: one or split", default="one").strip().lower()
+            )
+            if mode_input in ("one", "split"):
+                mode = mode_input
+
     plan: list[tuple[str, Suggestion]] = []
     ai_fallback_notes: list[tuple[str, str]] = []
-    sug, fb = suggest_for(selected_pairs, title="Selected")
-    plan.append(("one", sug))
-    if fb:
-        ai_fallback_notes.append(("", fb))
+    if mode == "split":
+        groups = _group_changes(selected_pairs)
+        for gname, items in groups.items():
+            sug, fb = suggest_for(items, title=gname.capitalize())
+            plan.append((gname, sug))
+            if fb:
+                ai_fallback_notes.append((gname, fb))
+    else:
+        sug, fb = suggest_for(selected_pairs, title="Selected")
+        plan.append(("one", sug))
+        if fb:
+            ai_fallback_notes.append(("", fb))
 
-    if ai and ai_fallback_notes:
+    if ai_model and ai_fallback_notes:
+        key_help = "Check AI_API_KEY, AI_MODEL, AI_MODEL_FALLBACKS, quota/model availability, and network."
         lines = [
-            "[bold]You used --ai, but Gemini was not used for the suggestion below.[/bold]",
+            "[bold]Configured AI was not used for the suggestion below.[/bold]",
             "Commit message(s) come from [bold]local heuristics[/bold] instead.",
             "",
         ]
-        lines.append(ai_fallback_notes[0][1])
+        if mode == "split":
+            for gname, reason in ai_fallback_notes:
+                lines.append(f"[dim]{gname}:[/dim] {reason}")
+        else:
+            lines.append(ai_fallback_notes[0][1])
         lines.append("")
-        lines.append(
-            "[dim]Check API key (GEMINI_API_KEY / GOOGLE_API_KEY), quota, model name, and network.[/dim]"
-        )
+        lines.append(f"[dim]{key_help}[/dim]")
         console.print(
             Panel(
                 "\n".join(lines),

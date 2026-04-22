@@ -1,9 +1,14 @@
+from google.genai import errors as genai_errors
+
 from git_explain.gemini import (
     COMMIT_LINE_RE,
     _COMMIT_LINE_BRACKET_RE,
     _fallback_type_and_message_with_context,
     _is_generic_message,
+    _is_retryable_gemini_error,
+    _model_chain,
     _normalize_type,
+    get_ai_key_error,
     truncate_commit_subject,
 )
 
@@ -71,6 +76,56 @@ def test_normalize_type_converts_tests_to_test() -> None:
     assert _normalize_type("TEST") == "TEST"
     assert _normalize_type("feat") == "FEAT"
     assert _normalize_type("unknown") == "CHORE"
+
+
+def test_get_ai_key_error_requires_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    err = get_ai_key_error("gemini-2.5-flash")
+    assert err is not None
+    assert "AI_API_KEY" in err
+
+
+def test_get_ai_key_error_gemini_ok_with_gemini_api_key_only(monkeypatch) -> None:
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    assert get_ai_key_error("gemini-2.5-flash") is None
+
+
+def test_get_ai_key_error_ignores_model_id_for_key_check(monkeypatch) -> None:
+    """Any model id uses the same Gemini API keys."""
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    err = get_ai_key_error("any-model-id")
+    assert err is not None
+
+
+def test_model_chain_dedupes_primary_from_fallbacks(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "AI_MODEL_FALLBACKS",
+        "gemini-2.5-flash-lite,gemini-2.5-flash",
+    )
+    assert _model_chain("gemini-2.5-flash") == [
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    ]
+
+
+def test_model_chain_includes_fallbacks_for_non_default_primary(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_MODEL_FALLBACKS", "gemini-2.5-flash-lite")
+    c = _model_chain("gemini-2.5-pro")
+    assert c == ["gemini-2.5-pro", "gemini-2.5-flash-lite"]
+
+
+def test_is_retryable_gemini_error_429() -> None:
+    err = genai_errors.ClientError(429, {"error": {"message": "rate"}}, None)
+    assert _is_retryable_gemini_error(err) is True
+
+
+def test_is_retryable_gemini_error_not_generic() -> None:
+    assert _is_retryable_gemini_error(ValueError("invalid")) is False
 
 
 def test_is_generic_message_flags_vague_add_changes() -> None:
