@@ -41,22 +41,29 @@ _AI_ENV_KEYS = (
 _GOOGLE_AI_API_KEY_URL = "https://aistudio.google.com/apikey"
 
 
-def _gemini_fallback_notifier() -> Callable[[str], None]:
-    """Dim one-line notices when switching models after rate limits / overload."""
+def _gemini_fallback_notifier(
+    group_label: str | None = None,
+) -> Callable[[str], None]:
+    """Dim one-line notices when switching models after rate limits / overload.
+
+    ``group_label`` prefixes the line in split-commit mode (one AI call per group),
+    so repeated "primary busy" messages are distinguishable.
+    """
     first: list[bool] = [True]
+    prefix = f"{group_label}: " if group_label else ""
 
     def _notify(next_model: str) -> None:
         if first[0]:
             console.print(
                 Text(
-                    f"Primary model busy; trying fallback: {next_model}",
+                    f"{prefix}Primary model busy; trying fallback: {next_model}",
                     style="dim",
                 )
             )
             first[0] = False
         else:
             console.print(
-                Text(f"Model busy; trying fallback: {next_model}", style="dim")
+                Text(f"{prefix}Model busy; trying fallback: {next_model}", style="dim")
             )
 
     return _notify
@@ -560,12 +567,13 @@ def run(
                 if diff_text:
                     payload = payload + "\n\n## Diff\n" + diff_text
             try:
+                fb_label = title if mode == "split" else None
                 sug, _raw = suggest_commands(
                     payload,
                     model=ai_model,
                     with_diff=with_diff,
                     unified_diff_for_infer=infer_diff,
-                    fallback_notifier=_gemini_fallback_notifier(),
+                    fallback_notifier=_gemini_fallback_notifier(fb_label),
                 )
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
