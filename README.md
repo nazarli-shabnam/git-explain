@@ -23,7 +23,7 @@ In a terminal, go to your project folder (the one that contains `.git`) and run:
 git-explain
 ```
 
-The first time you run it without `AI_MODEL` in `.env`, the tool asks whether to use **Gemini** or **Mistral** and can write `.env` for you.
+The first time you run it without `AI_MODEL` in `.env`, the tool can create `.env` with a default Gemini model and a link to create an API key.
 
 ---
 
@@ -33,13 +33,13 @@ Put a file named **`.env` in the repo root** (next to `.git`). Typical variables
 
 | Variable | Role |
 |----------|------|
-| `AI_MODEL` | Model id, e.g. `gemini-2.5-flash` or `codestral-latest`. Filled by the first-run prompt if missing. |
-| `AI_API_KEY` | API key for whichever provider matches `AI_MODEL`. |
-| `AI_MODEL_FALLBACKS` | Optional, **Gemini only**: comma-separated backup models if the first is rate-limited or overloaded. |
+| `AI_MODEL` | Gemini model id, e.g. `gemini-2.5-flash`. Set on first run if missing. |
+| `AI_API_KEY` | From [Google AI Studio](https://aistudio.google.com/apikey). |
+| `AI_MODEL_FALLBACKS` | Optional: comma-separated backup models, tried **in order** after `AI_MODEL` on retryable busy/rate-limit errors. If you omit this variable, the tool uses the **default fallbacks** below. |
 
-Older names still work if `AI_API_KEY` is empty: **`GEMINI_API_KEY`** (Gemini) or **`MISTRAL_API_KEY`** (Mistral).
+**Default `AI_MODEL_FALLBACKS` (when the variable is unset):** `gemini-2.5-flash-lite`, then `gemini-3-flash-preview` — each is tried in sequence after a failed attempt on the previous model in the chain (starting from `AI_MODEL`).
 
-**Keys:** [Google AI Studio](https://aistudio.google.com/apikey) (Gemini — names usually start with `gemini-`) · [Mistral API keys](https://admin.mistral.ai/organization/api-keys) (names starting with `mistral` or `codestral`). Mistral does not use automatic model fallback; Gemini can try fallbacks when the API is busy.
+If `AI_API_KEY` is empty, **`GEMINI_API_KEY`** is still read (same key, older name).
 
 ---
 
@@ -61,7 +61,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ## When AI fails
 
-Wrong key, bad model name, network issues, or quota errors → the tool falls back to local heuristics and shows a warning. Gemini may switch to `AI_MODEL_FALLBACKS` on retryable limits; Mistral does not.
+Wrong key, bad model name, network issues, or quota errors → the tool falls back to local heuristics and shows a warning. On retryable busy/rate-limit errors it steps through the fallback chain: your `AI_MODEL` first, then the models in `AI_MODEL_FALLBACKS` (or the **default** `gemini-2.5-flash-lite` → `gemini-3-flash-preview` list if that variable is unset).
 
 ---
 
