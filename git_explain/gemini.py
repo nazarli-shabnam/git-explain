@@ -11,8 +11,10 @@ from google.genai import types
 
 from git_explain.commit_infer import refine_type_and_message_from_diff
 from git_explain.path_topics import (
+    alnum_key,
     area_scope_suffix,
     basename_fallback_topic,
+    code_topics,
     infer_scope,
     infra_deploy_topics,
     is_test_path,
@@ -184,7 +186,6 @@ _GENERIC_MESSAGES = {
     "misc",
 }
 
-CODE_EXTS = {".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".php", ".cs"}
 _WEAK_TOPIC_WORDS = {
     "project",
     "projects",
@@ -208,40 +209,6 @@ _WEAK_TOPIC_WORDS = {
     "git",
     "explain",
 }
-
-
-def _code_topics(files: list[str]) -> list[str]:
-    labeled: list[tuple[str, str]] = []  # (folder_label, stem)
-    for p in files:
-        p2 = p.replace("\\", "/")
-        base = os.path.basename(p2)
-        ext = os.path.splitext(base)[1].lower()
-        if ext not in CODE_EXTS:
-            continue
-        stem = os.path.splitext(base)[0].replace("_", " ")
-        parts = [x for x in p2.split("/") if x]
-        folder = parts[-2] if len(parts) >= 2 else stem
-        labeled.append((folder.replace("_", " "), stem))
-
-    if not labeled:
-        return []
-
-    folder_set = {f.lower() for f, _ in labeled}
-    prefer_stems = len(folder_set) == 1 and len(labeled) >= 2
-
-    topics: list[str] = []
-    seen: set[str] = set()
-    for folder, stem in labeled:
-        label = stem if prefer_stems else folder
-        key = label.lower()
-        if key not in seen:
-            seen.add(key)
-            topics.append(label)
-    return topics
-
-
-def _alnum_key(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 
 
 def _is_generic_message(message: str) -> bool:
@@ -291,8 +258,8 @@ def _is_generic_message(message: str) -> bool:
         return True
     m_for = re.match(r"^(add|update|modify|make)\s+(.+?)\s+for\s+(.+)$", msg)
     if m_for:
-        left = _alnum_key(m_for.group(2))
-        right = _alnum_key(m_for.group(3))
+        left = alnum_key(m_for.group(2))
+        right = alnum_key(m_for.group(3))
         if left and right and (left == right or left in right or right in left):
             return True
     # "update X" is okay, but bare "update" or "update stuff" isn't
@@ -379,9 +346,9 @@ def _fallback_type_and_message_with_context(
             topics.append("tests")
     if touches_docs and not docs_only:
         topics.append("docs")
-    code_topics = _code_topics(files)
-    if code_topics:
-        topics.append(", ".join(code_topics[:5]))
+    file_code_topics = code_topics(files)
+    if file_code_topics:
+        topics.append(", ".join(file_code_topics[:5]))
     if touches_packaging:
         topics.append("packaging config")
 
@@ -402,8 +369,8 @@ def _fallback_type_and_message_with_context(
 
     scope = area_scope_suffix(files)
     if scope:
-        scope_key = _alnum_key(scope.replace("for", "", 1))
-        msg_key = _alnum_key(msg)
+        scope_key = alnum_key(scope.replace("for", "", 1))
+        msg_key = alnum_key(msg)
         if scope_key and scope_key not in msg_key:
             msg += scope
 

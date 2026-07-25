@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 
 from git_explain.commit_infer import refine_type_and_message_from_diff
 from git_explain.gemini import (
@@ -12,8 +11,11 @@ from git_explain.gemini import (
     truncate_commit_subject,
 )
 from git_explain.path_topics import (
+    CODE_EXTS,
+    alnum_key,
     area_scope_suffix,
     basename_fallback_topic,
+    code_topics,
     infer_scope,
     infra_deploy_topics,
     is_build_path,
@@ -36,7 +38,6 @@ CONFIG_FILES = {
     "license.md",
 }
 CONFIG_EXTS = {".toml", ".yml", ".yaml", ".json", ".ini", ".cfg", ".lock"}
-CODE_EXTS = {".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".php", ".cs"}
 
 
 def _is_doc(path: str) -> bool:
@@ -58,40 +59,6 @@ def _is_plain_config(path: str) -> bool:
 def _is_config(path: str) -> bool:
     """Packaging/config files plus Docker, Compose, nginx, env templates."""
     return _is_plain_config(path) or is_infra_deploy_path(path)
-
-
-def _code_topics(paths: list[str]) -> list[str]:
-    labeled: list[tuple[str, str]] = []  # (folder_label, stem)
-    for p in paths:
-        p2 = p.replace("\\", "/")
-        base = os.path.basename(p2)
-        ext = os.path.splitext(base)[1].lower()
-        if ext not in CODE_EXTS:
-            continue
-        stem = os.path.splitext(base)[0].replace("_", " ")
-        parts = [x for x in p2.split("/") if x]
-        folder = parts[-2] if len(parts) >= 2 else stem
-        labeled.append((folder.replace("_", " "), stem))
-
-    if not labeled:
-        return []
-
-    folder_set = {f.lower() for f, _ in labeled}
-    prefer_stems = len(folder_set) == 1 and len(labeled) >= 2
-
-    topics: list[str] = []
-    seen: set[str] = set()
-    for folder, stem in labeled:
-        label = stem if prefer_stems else folder
-        key = label.lower()
-        if key not in seen:
-            seen.add(key)
-            topics.append(label)
-    return topics
-
-
-def _alnum_key(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 
 
 def _path_first_segment(path: str) -> str:
@@ -175,9 +142,9 @@ def suggest_from_changes(
             topics.append("tests")
     if any(_is_plain_config(p) for p in paths):
         topics.append("config")
-    code_topics = _code_topics(paths)
-    if code_topics:
-        if len(code_topics) > 4:
+    file_code_topics = code_topics(paths)
+    if file_code_topics:
+        if len(file_code_topics) > 4:
             roots = {_path_first_segment(p) for p in paths}
             if len(roots) == 1:
                 root = next(iter(roots))
@@ -189,9 +156,9 @@ def suggest_from_changes(
                 a, b = sorted(roots)
                 topics.append(f"{len(paths)} files across {a} and {b}")
             else:
-                topics.append(", ".join(code_topics[:4]))
+                topics.append(", ".join(file_code_topics[:4]))
         else:
-            topics.append(", ".join(code_topics[:5]))
+            topics.append(", ".join(file_code_topics[:5]))
 
     # Dedupe while preserving order
     seen: set[str] = set()
@@ -210,8 +177,8 @@ def suggest_from_changes(
 
     scope_suffix = area_scope_suffix(paths)
     if scope_suffix:
-        scope_key = _alnum_key(scope_suffix.replace("for", "", 1))
-        msg_key = _alnum_key(message)
+        scope_key = alnum_key(scope_suffix.replace("for", "", 1))
+        msg_key = alnum_key(message)
         if scope_key and scope_key not in msg_key:
             message += scope_suffix
 
