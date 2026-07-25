@@ -1,3 +1,7 @@
+# Publishes the package to PyPI. Runs alongside release.yml (same v* tag
+# trigger, separate purpose): this workflow publishes the distribution to
+# PyPI via trusted publishing; release.yml creates the GitHub Release with
+# generated notes and uploads the same distribution as release assets.
 name: Publish to PyPI
 
 on:

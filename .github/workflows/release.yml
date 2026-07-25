@@ -1,3 +1,8 @@
+# Creates the GitHub Release with generated notes and uploaded distribution
+# assets. Runs alongside pypi-publish.yml (same v* tag trigger, separate
+# purpose): that workflow publishes the distribution to PyPI; this one
+# publishes the GitHub Release. Each builds its own copy of the package
+# rather than sharing a build artifact between the two workflows.
 name: Release
 
 on:
