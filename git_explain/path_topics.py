@@ -3,10 +3,50 @@
 from __future__ import annotations
 
 import os
+import re
 
 
 def _norm(p: str) -> str:
     return p.replace("\\", "/").strip()
+
+
+CODE_EXTS = {".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".rb", ".php", ".cs"}
+
+
+def alnum_key(s: str) -> str:
+    """Lowercase alnum-only key, for loose substring comparisons of free text."""
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+def code_topics(paths: list[str]) -> list[str]:
+    """Ordered, deduplicated topic labels for code files: filename stems or parent folders."""
+    labeled: list[tuple[str, str]] = []  # (folder_label, stem)
+    for p in paths:
+        p2 = p.replace("\\", "/")
+        base = os.path.basename(p2)
+        ext = os.path.splitext(base)[1].lower()
+        if ext not in CODE_EXTS:
+            continue
+        stem = os.path.splitext(base)[0].replace("_", " ")
+        parts = [x for x in p2.split("/") if x]
+        folder = parts[-2] if len(parts) >= 2 else stem
+        labeled.append((folder.replace("_", " "), stem))
+
+    if not labeled:
+        return []
+
+    folder_set = {f.lower() for f, _ in labeled}
+    prefer_stems = len(folder_set) == 1 and len(labeled) >= 2
+
+    topics: list[str] = []
+    seen: set[str] = set()
+    for folder, stem in labeled:
+        label = stem if prefer_stems else folder
+        key = label.lower()
+        if key not in seen:
+            seen.add(key)
+            topics.append(label)
+    return topics
 
 
 _TEST_HINTS = ("pytest", "unittest", "tests/", "/tests/")
