@@ -8,8 +8,11 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Iterable
 
+import httpx
+import requests
 import typer
 from dotenv import dotenv_values
+from google.genai import errors as genai_errors
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -39,6 +42,16 @@ _AI_ENV_KEYS = (
 )
 # Terminal hyperlinks (OSC 8) for first-run setup — Ctrl+click in supported terminals.
 _GOOGLE_AI_API_KEY_URL = "https://aistudio.google.com/apikey"
+
+# Expected failure modes from an AI call: missing key / unparseable response
+# (RuntimeError), Gemini API errors, and network-level failures. Anything else
+# is a real bug and should not be silently treated as "AI unavailable".
+_AI_CALL_ERRORS = (
+    RuntimeError,
+    genai_errors.APIError,
+    httpx.HTTPError,
+    requests.exceptions.RequestException,
+)
 
 
 def _gemini_fallback_notifier(
@@ -578,7 +591,7 @@ def run(
                 if sug is None:
                     raise RuntimeError("Could not parse AI suggestion.")
                 return sug, None
-            except Exception as e:
+            except _AI_CALL_ERRORS as e:
                 h = suggest_from_changes(
                     changes=change_items,
                     has_commits=has_commits,
