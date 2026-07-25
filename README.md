@@ -4,7 +4,6 @@ Suggests **conventional** `git add` / `git commit` messages from your changes. U
 
 [![PyPI](https://img.shields.io/pypi/v/git-explain.svg?label=pypi)](https://pypi.org/project/git-explain/)
 [![GitHub tag](https://img.shields.io/github/v/tag/nazarli-shabnam/git-explain?label=repo)](https://github.com/nazarli-shabnam/git-explain/tags)
-<!-- GitAds-Verify: 29ITVVWNRUVU524NJ5ZRR6DSZKIHP3EX -->
 
 ---
 
@@ -87,7 +86,4 @@ python -m git_explain
 ```
 
 Contributors: `pip install -e ".[dev]"` then `pytest -q`, `ruff check .`, `ruff format --check .`.
-
-## GitAds Sponsored
-[![Sponsored by GitAds](https://gitads.dev/v1/ad-serve?source=nazarli-shabnam/git-explain@github)](https://gitads.dev/v1/ad-track?source=nazarli-shabnam/git-explain@github)
 
