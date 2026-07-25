@@ -400,6 +400,371 @@ def main(
     )
 
 
+def _handle_suggest_only_mode(
+    *,
+    changes: list[Change],
+    has_commits: bool | None,
+    ai_model: str | None,
+    repo_root: Path,
+) -> None:
+    """Implements --suggest: print one ``git commit -m "..."`` line and exit."""
+    staged_changes = [c for c in changes if "Staged" in c.sections]
+    if not staged_changes:
+        console.print(
+            "[yellow]Warning:[/yellow] --suggest requires staged changes. "
+            "Stage files first (git add ...), then run --suggest again."
+        )
+        raise typer.Exit(1)
+    selected_pairs = [(ch.status, ch.path) for ch in staged_changes]
+    payload = _render_combined(has_commits, selected_pairs, title="Staged")
+    paths = [p for _, p in selected_pairs]
+    staged_diff = get_staged_diff_for_paths(paths, cwd=repo_root)
+    if staged_diff:
+        payload = payload + "\n\n## Diff\n" + staged_diff
+    infer_diff = (
+        staged_diff[:_DIFF_INFER_MAX_CHARS]
+        if len(staged_diff) > _DIFF_INFER_MAX_CHARS
+        else staged_diff
+    )
+    if not ai_model:
+        console.print(
+            "[red]Error:[/red] --suggest requires an AI model. "
+            "Set AI_MODEL in repo .env or pass --model."
+        )
+        raise typer.Exit(1)
+    try:
+        sug, _raw = suggest_commands(
+            payload,
+            model=ai_model,
+            with_diff=bool(staged_diff),
+            unified_diff_for_infer=infer_diff,
+            fallback_notifier=_gemini_fallback_notifier(),
+        )
+        if sug is None:
+            raise RuntimeError("Could not parse AI suggestion.")
+    except Exception as e:
+        console.print(
+            f"[red]Error:[/red] --suggest requires AI and failed to get a suggestion: {e}"
+        )
+        raise typer.Exit(1)
+
+    cmsg = normalize_commit_subject_for_dash_m(sug.commit_message)
+    full = format_commit_message(
+        sug.commit_type, cmsg, scope=sug.scope, breaking=sug.breaking
+    )
+    print(f'git commit -m "{full}"')
+
+
+def _select_files(changes: list[Change]) -> list[Change] | None:
+    """Interactive file-selection UI. Returns None (after printing why) if nothing usable was selected."""
+    norm_paths = [c.path.replace("\\", "/") for c in changes]
+    display_items: list[tuple[str, list[int]]] = []
+    for idx, ch in enumerate(changes):
+        sec = ",".join([s.lower() for s in ch.sections if s and s != "Meta"])
+        label = f"[{ch.status}] ({sec}) {ch.path}"
+        display_items.append((label, [idx]))
+
+    lines = []
+    for idx, (label, _idxs) in enumerate(display_items, start=1):
+        lines.append(f"{idx:>2}. {label}")
+    console.print(Panel("\n".join(lines), title="Select files", border_style="blue"))
+    selection = typer.prompt(
+        "Select files to include (e.g. 1,2,5-7, 'all', or a path like folder/file.txt)",
+        default="all",
+    )
+    picks, path_tokens = _parse_selection(selection, len(display_items))
+    if not picks and not path_tokens:
+        console.print("[yellow]No files selected.[/yellow]")
+        return None
+
+    selected_indices: set[int] = set()
+    for display_idx in picks:
+        if 1 <= display_idx <= len(display_items):
+            _, idxs = display_items[display_idx - 1]
+            selected_indices.update(idxs)
+
+    for token in path_tokens:
+        t_norm = token.replace("\\", "/").strip()
+        for idx, np in enumerate(norm_paths):
+            if np == t_norm or np.startswith(t_norm.rstrip("/") + "/"):
+                selected_indices.add(idx)
+
+    if not selected_indices:
+        console.print("[yellow]No files matched your selection.[/yellow]")
+        return None
+
+    return [changes[i] for i in sorted(selected_indices)]
+
+
+def _warn_if_partial_staging_risk(selected: list[Change], staged_only: bool) -> bool:
+    """Return False if the user declined to continue past a partial-staging warning."""
+    if staged_only:
+        return True
+    risky = [
+        c for c in selected if ("Staged" in c.sections and "Unstaged" in c.sections)
+    ]
+    if not risky:
+        return True
+    msg = "\n".join([f"- {c.path}" for c in risky])
+    console.print(
+        Panel(
+            "These files have both staged and unstaged changes.\n"
+            "If you apply, git-explain will stage the whole file, which can override partial staging.\n\n"
+            + msg
+            + "\n\nTip: re-run with --staged-only to commit only what's already staged.",
+            title="Warning: partial staging",
+            border_style="yellow",
+        )
+    )
+    cont = typer.prompt("Continue anyway? (y/n)", default="n").strip().lower()
+    return cont in ("y", "yes")
+
+
+def _suggest_for_group(
+    change_items: list[tuple[str, str]],
+    title: str,
+    *,
+    repo_root: Path,
+    has_commits: bool | None,
+    ai_model: str | None,
+    with_diff: bool,
+    mode: str,
+) -> tuple[Suggestion, str | None]:
+    """Return (suggestion, ai_fallback_reason)."""
+    paths_for_infer = [p for _, p in change_items]
+    infer_diff: str | None = None
+    if paths_for_infer:
+        raw_d = get_diff_for_paths(paths_for_infer, cwd=repo_root)
+        if raw_d.strip():
+            infer_diff = (
+                raw_d[:_DIFF_INFER_MAX_CHARS]
+                if len(raw_d) > _DIFF_INFER_MAX_CHARS
+                else raw_d
+            )
+
+    if ai_model:
+        payload = _render_combined(has_commits, change_items, title=title)
+        if with_diff:
+            paths_for_diff = [p for _, p in change_items]
+            diff_text = get_diff_for_paths(paths_for_diff, cwd=repo_root)
+            if diff_text:
+                payload = payload + "\n\n## Diff\n" + diff_text
+        try:
+            fb_label = title if mode == "split" else None
+            sug, _raw = suggest_commands(
+                payload,
+                model=ai_model,
+                with_diff=with_diff,
+                unified_diff_for_infer=infer_diff,
+                fallback_notifier=_gemini_fallback_notifier(fb_label),
+            )
+            if sug is None:
+                raise RuntimeError("Could not parse AI suggestion.")
+            return sug, None
+        except Exception as e:
+            h = suggest_from_changes(
+                changes=change_items,
+                has_commits=has_commits,
+                diff_text=infer_diff,
+            )
+            return h, str(e)
+    h = suggest_from_changes(
+        changes=change_items,
+        has_commits=has_commits,
+        diff_text=infer_diff,
+    )
+    return h, None
+
+
+def _determine_commit_mode(unique_paths: set[str], staged_only: bool) -> str:
+    if len(unique_paths) <= 1:
+        return "one"
+    if staged_only:
+        console.print(
+            "[dim]Note:[/dim] split commits are not available with --staged-only: "
+            "each commit would need its own staging, but this mode skips git add. "
+            "Using a single commit for everything currently staged."
+        )
+        return "one"
+    mode_input = (
+        typer.prompt("Commit mode: one or split", default="one").strip().lower()
+    )
+    return mode_input if mode_input in ("one", "split") else "one"
+
+
+def _build_commit_plan(
+    selected_pairs: list[tuple[str, str]],
+    *,
+    mode: str,
+    repo_root: Path,
+    has_commits: bool | None,
+    ai_model: str | None,
+    with_diff: bool,
+) -> tuple[list[tuple[str, Suggestion]], list[tuple[str, str]]]:
+    plan: list[tuple[str, Suggestion]] = []
+    ai_fallback_notes: list[tuple[str, str]] = []
+    if mode == "split":
+        groups = _group_changes(selected_pairs)
+        for gname, items in groups.items():
+            sug, fb = _suggest_for_group(
+                items,
+                title=gname.capitalize(),
+                repo_root=repo_root,
+                has_commits=has_commits,
+                ai_model=ai_model,
+                with_diff=with_diff,
+                mode=mode,
+            )
+            plan.append((gname, sug))
+            if fb:
+                ai_fallback_notes.append((gname, fb))
+    else:
+        sug, fb = _suggest_for_group(
+            selected_pairs,
+            title="Selected",
+            repo_root=repo_root,
+            has_commits=has_commits,
+            ai_model=ai_model,
+            with_diff=with_diff,
+            mode=mode,
+        )
+        plan.append(("one", sug))
+        if fb:
+            ai_fallback_notes.append(("", fb))
+    return plan, ai_fallback_notes
+
+
+def _print_ai_fallback_warning(
+    mode: str, ai_fallback_notes: list[tuple[str, str]]
+) -> None:
+    key_help = "Check AI_API_KEY, AI_MODEL, AI_MODEL_FALLBACKS, quota/model availability, and network."
+    lines = [
+        "[bold]Configured AI was not used for the suggestion below.[/bold]",
+        "Commit message(s) come from [bold]local heuristics[/bold] instead.",
+        "",
+    ]
+    if mode == "split":
+        for gname, reason in ai_fallback_notes:
+            lines.append(f"[dim]{gname}:[/dim] {reason}")
+    else:
+        lines.append(ai_fallback_notes[0][1])
+    lines.append("")
+    lines.append(f"[dim]{key_help}[/dim]")
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[yellow]Warning: AI unavailable[/yellow]",
+            border_style="yellow",
+        )
+    )
+
+
+def _render_plan(pl: list[tuple[str, Suggestion]]) -> str:
+    rendered: list[str] = []
+    for name, sug in pl:
+        add_line = "git add -A -- " + " ".join(_ps_quote(p) for p in sug.add_args)
+        subj = normalize_commit_subject_for_dash_m(sug.commit_message)
+        full = format_commit_message(
+            sug.commit_type, subj, scope=sug.scope, breaking=sug.breaking
+        )
+        commit_line = f'git commit -m "{full}"'
+        rendered.append(f"### {name}\n{add_line}\n{commit_line}")
+    return "\n\n".join(rendered)
+
+
+def _maybe_edit_plan(
+    plan: list[tuple[str, Suggestion]], auto: bool
+) -> list[tuple[str, Suggestion]]:
+    if auto:
+        return plan
+    edit_choice = (
+        typer.prompt(
+            "Edit commit message(s) before applying? (y/n)",
+            default="n",
+        )
+        .strip()
+        .lower()
+    )
+    if edit_choice not in ("y", "yes"):
+        return plan
+    updated: list[tuple[str, Suggestion]] = []
+    for name, sug in plan:
+        current = format_commit_message(
+            sug.commit_type,
+            sug.commit_message,
+            scope=sug.scope,
+            breaking=sug.breaking,
+        )
+        console.print(f"[dim]{name}:[/dim] current message: [bold]{current}[/bold]")
+        try:
+            from prompt_toolkit import prompt as pt_prompt
+
+            new_msg = (
+                pt_prompt(
+                    "New commit message (subject only, type/scope added automatically): ",
+                    default=sug.commit_message,
+                ).strip()
+                or sug.commit_message
+            )
+        except Exception:
+            new_msg = (
+                typer.prompt(
+                    "New commit message (subject only, type/scope added automatically)",
+                    default=sug.commit_message,
+                ).strip()
+            ) or sug.commit_message
+        updated.append((name, replace(sug, commit_message=new_msg)))
+    console.print(
+        Panel(
+            _render_plan(updated),
+            title="Updated commands",
+            border_style="green",
+        )
+    )
+    return updated
+
+
+def _confirm_apply(plan: list[tuple[str, Suggestion]], auto: bool) -> bool:
+    if auto:
+        return True
+    prompt = (
+        "Apply these commit(s)? (y/n)"
+        if len(plan) > 1
+        else "Apply these commands? (y/n)"
+    )
+    choice = typer.prompt(prompt, default="y").strip().lower()
+    return choice in ("y", "yes")
+
+
+def _apply_plan(
+    plan: list[tuple[str, Suggestion]], repo_root: Path, staged_only: bool
+) -> None:
+    for name, sug in plan:
+        try:
+            apply_commands(
+                repo_root,
+                [] if staged_only else sug.add_args,
+                sug.commit_type,
+                sug.commit_message,
+                scope=sug.scope,
+                body=sug.body,
+                breaking=sug.breaking,
+                staged_only=staged_only,
+            )
+            console.print(f"[green]Commit created ({name}).[/green]")
+        except subprocess.CalledProcessError as e:
+            console.print("[red]git command failed.[/red]")
+            console.print(f"[dim]Command:[/dim] {e.cmd}")
+            if e.stdout:
+                console.print(e.stdout)
+            if e.stderr:
+                console.print(e.stderr)
+            raise typer.Exit(1)
+        except RuntimeError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(1)
+
+
 def run(
     cwd: Path | None = None,
     auto: bool = False,
@@ -430,51 +795,12 @@ def run(
     console.print(Panel(combined, title="Changed files", border_style="dim"))
 
     if suggest:
-        staged_changes = [c for c in changes if "Staged" in c.sections]
-        if not staged_changes:
-            console.print(
-                "[yellow]Warning:[/yellow] --suggest requires staged changes. "
-                "Stage files first (git add ...), then run --suggest again."
-            )
-            raise typer.Exit(1)
-        selected_pairs = [(ch.status, ch.path) for ch in staged_changes]
-        payload = _render_combined(has_commits, selected_pairs, title="Staged")
-        paths = [p for _, p in selected_pairs]
-        staged_diff = get_staged_diff_for_paths(paths, cwd=repo_root)
-        if staged_diff:
-            payload = payload + "\n\n## Diff\n" + staged_diff
-        infer_diff = (
-            staged_diff[:_DIFF_INFER_MAX_CHARS]
-            if len(staged_diff) > _DIFF_INFER_MAX_CHARS
-            else staged_diff
+        _handle_suggest_only_mode(
+            changes=changes,
+            has_commits=has_commits,
+            ai_model=ai_model,
+            repo_root=repo_root,
         )
-        if not ai_model:
-            console.print(
-                "[red]Error:[/red] --suggest requires an AI model. "
-                "Set AI_MODEL in repo .env or pass --model."
-            )
-            raise typer.Exit(1)
-        try:
-            sug, _raw = suggest_commands(
-                payload,
-                model=ai_model,
-                with_diff=bool(staged_diff),
-                unified_diff_for_infer=infer_diff,
-                fallback_notifier=_gemini_fallback_notifier(),
-            )
-            if sug is None:
-                raise RuntimeError("Could not parse AI suggestion.")
-        except Exception as e:
-            console.print(
-                f"[red]Error:[/red] --suggest requires AI and failed to get a suggestion: {e}"
-            )
-            raise typer.Exit(1)
-
-        cmsg = normalize_commit_subject_for_dash_m(sug.commit_message)
-        full = format_commit_message(
-            sug.commit_type, cmsg, scope=sug.scope, breaking=sug.breaking
-        )
-        print(f'git commit -m "{full}"')
         return
 
     if staged_only:
@@ -487,177 +813,28 @@ def run(
         console.print("[yellow]No selectable changes found.[/yellow]")
         return
 
-    norm_paths = [c.path.replace("\\", "/") for c in changes]
-    display_items: list[tuple[str, list[int]]] = []
-    for idx, ch in enumerate(changes):
-        sec = ",".join([s.lower() for s in ch.sections if s and s != "Meta"])
-        label = f"[{ch.status}] ({sec}) {ch.path}"
-        display_items.append((label, [idx]))
-
-    lines = []
-    for idx, (label, _idxs) in enumerate(display_items, start=1):
-        lines.append(f"{idx:>2}. {label}")
-    console.print(Panel("\n".join(lines), title="Select files", border_style="blue"))
-    selection = typer.prompt(
-        "Select files to include (e.g. 1,2,5-7, 'all', or a path like folder/file.txt)",
-        default="all",
-    )
-    picks, path_tokens = _parse_selection(selection, len(display_items))
-    if not picks and not path_tokens:
-        console.print("[yellow]No files selected.[/yellow]")
+    selected = _select_files(changes)
+    if selected is None:
         return
 
-    selected_indices: set[int] = set()
-    for display_idx in picks:
-        if 1 <= display_idx <= len(display_items):
-            _, idxs = display_items[display_idx - 1]
-            selected_indices.update(idxs)
-
-    for token in path_tokens:
-        t_norm = token.replace("\\", "/").strip()
-        for idx, np in enumerate(norm_paths):
-            if np == t_norm or np.startswith(t_norm.rstrip("/") + "/"):
-                selected_indices.add(idx)
-
-    if not selected_indices:
-        console.print("[yellow]No files matched your selection.[/yellow]")
+    if not _warn_if_partial_staging_risk(selected, staged_only):
         return
-
-    selected = [changes[i] for i in sorted(selected_indices)]
-    if not staged_only:
-        risky = [
-            c for c in selected if ("Staged" in c.sections and "Unstaged" in c.sections)
-        ]
-        if risky:
-            msg = "\n".join([f"- {c.path}" for c in risky])
-            console.print(
-                Panel(
-                    "These files have both staged and unstaged changes.\n"
-                    "If you apply, git-explain will stage the whole file, which can override partial staging.\n\n"
-                    + msg
-                    + "\n\nTip: re-run with --staged-only to commit only what's already staged.",
-                    title="Warning: partial staging",
-                    border_style="yellow",
-                )
-            )
-            cont = typer.prompt("Continue anyway? (y/n)", default="n").strip().lower()
-            if cont not in ("y", "yes"):
-                return
-
-    def suggest_for(
-        change_items: list[tuple[str, str]], title: str
-    ) -> tuple[Suggestion, str | None]:
-        """Return (suggestion, ai_fallback_reason)."""
-        paths_for_infer = [p for _, p in change_items]
-        infer_diff: str | None = None
-        if paths_for_infer:
-            raw_d = get_diff_for_paths(paths_for_infer, cwd=repo_root)
-            if raw_d.strip():
-                infer_diff = (
-                    raw_d[:_DIFF_INFER_MAX_CHARS]
-                    if len(raw_d) > _DIFF_INFER_MAX_CHARS
-                    else raw_d
-                )
-
-        if ai_model:
-            payload = _render_combined(has_commits, change_items, title=title)
-            if with_diff:
-                paths_for_diff = [p for _, p in change_items]
-                diff_text = get_diff_for_paths(paths_for_diff, cwd=repo_root)
-                if diff_text:
-                    payload = payload + "\n\n## Diff\n" + diff_text
-            try:
-                fb_label = title if mode == "split" else None
-                sug, _raw = suggest_commands(
-                    payload,
-                    model=ai_model,
-                    with_diff=with_diff,
-                    unified_diff_for_infer=infer_diff,
-                    fallback_notifier=_gemini_fallback_notifier(fb_label),
-                )
-                if sug is None:
-                    raise RuntimeError("Could not parse AI suggestion.")
-                return sug, None
-            except Exception as e:
-                h = suggest_from_changes(
-                    changes=change_items,
-                    has_commits=has_commits,
-                    diff_text=infer_diff,
-                )
-                return h, str(e)
-        h = suggest_from_changes(
-            changes=change_items,
-            has_commits=has_commits,
-            diff_text=infer_diff,
-        )
-        return h, None
 
     selected_pairs = [(ch.status, ch.path) for ch in selected]
     unique_paths = {p for _, p in selected_pairs}
+    mode = _determine_commit_mode(unique_paths, staged_only)
 
-    mode = "one"
-    if len(unique_paths) > 1:
-        if staged_only:
-            console.print(
-                "[dim]Note:[/dim] split commits are not available with --staged-only: "
-                "each commit would need its own staging, but this mode skips git add. "
-                "Using a single commit for everything currently staged."
-            )
-        else:
-            mode_input = (
-                typer.prompt("Commit mode: one or split", default="one").strip().lower()
-            )
-            if mode_input in ("one", "split"):
-                mode = mode_input
-
-    plan: list[tuple[str, Suggestion]] = []
-    ai_fallback_notes: list[tuple[str, str]] = []
-    if mode == "split":
-        groups = _group_changes(selected_pairs)
-        for gname, items in groups.items():
-            sug, fb = suggest_for(items, title=gname.capitalize())
-            plan.append((gname, sug))
-            if fb:
-                ai_fallback_notes.append((gname, fb))
-    else:
-        sug, fb = suggest_for(selected_pairs, title="Selected")
-        plan.append(("one", sug))
-        if fb:
-            ai_fallback_notes.append(("", fb))
+    plan, ai_fallback_notes = _build_commit_plan(
+        selected_pairs,
+        mode=mode,
+        repo_root=repo_root,
+        has_commits=has_commits,
+        ai_model=ai_model,
+        with_diff=with_diff,
+    )
 
     if ai_model and ai_fallback_notes:
-        key_help = "Check AI_API_KEY, AI_MODEL, AI_MODEL_FALLBACKS, quota/model availability, and network."
-        lines = [
-            "[bold]Configured AI was not used for the suggestion below.[/bold]",
-            "Commit message(s) come from [bold]local heuristics[/bold] instead.",
-            "",
-        ]
-        if mode == "split":
-            for gname, reason in ai_fallback_notes:
-                lines.append(f"[dim]{gname}:[/dim] {reason}")
-        else:
-            lines.append(ai_fallback_notes[0][1])
-        lines.append("")
-        lines.append(f"[dim]{key_help}[/dim]")
-        console.print(
-            Panel(
-                "\n".join(lines),
-                title="[yellow]Warning: AI unavailable[/yellow]",
-                border_style="yellow",
-            )
-        )
-
-    def _render_plan(pl: list[tuple[str, Suggestion]]) -> str:
-        rendered: list[str] = []
-        for name, sug in pl:
-            add_line = "git add -A -- " + " ".join(_ps_quote(p) for p in sug.add_args)
-            subj = normalize_commit_subject_for_dash_m(sug.commit_message)
-            full = format_commit_message(
-                sug.commit_type, subj, scope=sug.scope, breaking=sug.breaking
-            )
-            commit_line = f'git commit -m "{full}"'
-            rendered.append(f"### {name}\n{add_line}\n{commit_line}")
-        return "\n\n".join(rendered)
+        _print_ai_fallback_warning(mode, ai_fallback_notes)
 
     console.print(
         Panel(
@@ -667,87 +844,7 @@ def run(
         )
     )
 
-    if not auto:
-        edit_choice = (
-            typer.prompt(
-                "Edit commit message(s) before applying? (y/n)",
-                default="n",
-            )
-            .strip()
-            .lower()
-        )
-        if edit_choice in ("y", "yes"):
-            updated: list[tuple[str, Suggestion]] = []
-            for name, sug in plan:
-                current = format_commit_message(
-                    sug.commit_type,
-                    sug.commit_message,
-                    scope=sug.scope,
-                    breaking=sug.breaking,
-                )
-                console.print(
-                    f"[dim]{name}:[/dim] current message: [bold]{current}[/bold]"
-                )
-                try:
-                    from prompt_toolkit import prompt as pt_prompt
+    plan = _maybe_edit_plan(plan, auto)
 
-                    new_msg = (
-                        pt_prompt(
-                            "New commit message (subject only, type/scope added automatically): ",
-                            default=sug.commit_message,
-                        ).strip()
-                        or sug.commit_message
-                    )
-                except Exception:
-                    new_msg = (
-                        typer.prompt(
-                            "New commit message (subject only, type/scope added automatically)",
-                            default=sug.commit_message,
-                        ).strip()
-                    ) or sug.commit_message
-                updated.append((name, replace(sug, commit_message=new_msg)))
-            plan = updated
-            console.print(
-                Panel(
-                    _render_plan(plan),
-                    title="Updated commands",
-                    border_style="green",
-                )
-            )
-
-    if auto:
-        do_apply = True
-    else:
-        prompt = (
-            "Apply these commit(s)? (y/n)"
-            if len(plan) > 1
-            else "Apply these commands? (y/n)"
-        )
-        choice = typer.prompt(prompt, default="y").strip().lower()
-        do_apply = choice in ("y", "yes")
-
-    if do_apply:
-        for name, sug in plan:
-            try:
-                apply_commands(
-                    repo_root,
-                    [] if staged_only else sug.add_args,
-                    sug.commit_type,
-                    sug.commit_message,
-                    scope=sug.scope,
-                    body=sug.body,
-                    breaking=sug.breaking,
-                    staged_only=staged_only,
-                )
-                console.print(f"[green]Commit created ({name}).[/green]")
-            except subprocess.CalledProcessError as e:
-                console.print("[red]git command failed.[/red]")
-                console.print(f"[dim]Command:[/dim] {e.cmd}")
-                if e.stdout:
-                    console.print(e.stdout)
-                if e.stderr:
-                    console.print(e.stderr)
-                raise typer.Exit(1)
-            except RuntimeError as e:
-                console.print(f"[red]Error:[/red] {e}")
-                raise typer.Exit(1)
+    if _confirm_apply(plan, auto):
+        _apply_plan(plan, repo_root, staged_only)
