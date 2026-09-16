@@ -454,8 +454,12 @@ def _handle_suggest_only_mode(
     print(f'git commit -m "{full}"')
 
 
-def _select_files(changes: list[Change]) -> list[Change] | None:
-    """Interactive file-selection UI. Returns None (after printing why) if nothing usable was selected."""
+def _select_files(changes: list[Change], auto: bool = False) -> list[Change] | None:
+    """Interactive file-selection UI. Returns None (after printing why) if nothing usable was selected.
+
+    ``auto`` skips the prompt and selects everything (equivalent to typing 'all'),
+    so ``--auto`` never blocks waiting for input.
+    """
     norm_paths = [c.path.replace("\\", "/") for c in changes]
     display_items: list[tuple[str, list[int]]] = []
     for idx, ch in enumerate(changes):
@@ -467,10 +471,13 @@ def _select_files(changes: list[Change]) -> list[Change] | None:
     for idx, (label, _idxs) in enumerate(display_items, start=1):
         lines.append(f"{idx:>2}. {label}")
     console.print(Panel("\n".join(lines), title="Select files", border_style="blue"))
-    selection = typer.prompt(
-        "Select files to include (e.g. 1,2,5-7, 'all', or a path like folder/file.txt)",
-        default="all",
-    )
+    if auto:
+        selection = "all"
+    else:
+        selection = typer.prompt(
+            "Select files to include (e.g. 1,2,5-7, 'all', or a path like folder/file.txt)",
+            default="all",
+        )
     picks, path_tokens = _parse_selection(selection, len(display_items))
     if not picks and not path_tokens:
         console.print("[yellow]No files selected.[/yellow]")
@@ -495,8 +502,13 @@ def _select_files(changes: list[Change]) -> list[Change] | None:
     return [changes[i] for i in sorted(selected_indices)]
 
 
-def _warn_if_partial_staging_risk(selected: list[Change], staged_only: bool) -> bool:
-    """Return False if the user declined to continue past a partial-staging warning."""
+def _warn_if_partial_staging_risk(
+    selected: list[Change], staged_only: bool, auto: bool = False
+) -> bool:
+    """Return False if the user declined to continue past a partial-staging warning.
+
+    ``auto`` skips the prompt and continues, matching --auto's "no prompting" contract.
+    """
     if staged_only:
         return True
     risky = [
@@ -515,6 +527,8 @@ def _warn_if_partial_staging_risk(selected: list[Change], staged_only: bool) -> 
             border_style="yellow",
         )
     )
+    if auto:
+        return True
     cont = typer.prompt("Continue anyway? (y/n)", default="n").strip().lower()
     return cont in ("y", "yes")
 
@@ -575,7 +589,10 @@ def _suggest_for_group(
     return h, None
 
 
-def _determine_commit_mode(unique_paths: set[str], staged_only: bool) -> str:
+def _determine_commit_mode(
+    unique_paths: set[str], staged_only: bool, auto: bool = False
+) -> str:
+    """``auto`` skips the prompt and defaults to 'one', matching --auto's "no prompting" contract."""
     if len(unique_paths) <= 1:
         return "one"
     if staged_only:
@@ -584,6 +601,8 @@ def _determine_commit_mode(unique_paths: set[str], staged_only: bool) -> str:
             "each commit would need its own staging, but this mode skips git add. "
             "Using a single commit for everything currently staged."
         )
+        return "one"
+    if auto:
         return "one"
     mode_input = (
         typer.prompt("Commit mode: one or split", default="one").strip().lower()
@@ -812,16 +831,16 @@ def run(
         console.print("[yellow]No selectable changes found.[/yellow]")
         return
 
-    selected = _select_files(changes)
+    selected = _select_files(changes, auto)
     if selected is None:
         return
 
-    if not _warn_if_partial_staging_risk(selected, staged_only):
+    if not _warn_if_partial_staging_risk(selected, staged_only, auto):
         return
 
     selected_pairs = [(ch.status, ch.path) for ch in selected]
     unique_paths = {p for _, p in selected_pairs}
-    mode = _determine_commit_mode(unique_paths, staged_only)
+    mode = _determine_commit_mode(unique_paths, staged_only, auto)
 
     plan, ai_fallback_notes = _build_commit_plan(
         selected_pairs,
