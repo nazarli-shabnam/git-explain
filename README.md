@@ -22,7 +22,7 @@ In a terminal, go to your project folder (the one that contains `.git`) and run:
 git-explain
 ```
 
-The first time you run it without `AI_MODEL` in `.env`, the tool can create `.env` with a default Gemini model and a link to create an API key.
+The first time you run it without `AI_MODEL` set, the tool offers to create `.env` for your API key and shows a link to create one — it uses a built-in default Gemini model for that run but does **not** write a model into `.env`. Google renames and retires model ids over time, so nothing is pinned automatically; set `AI_MODEL` yourself (or pass `--model`) once you want a specific one to stick.
 
 ---
 
@@ -32,9 +32,11 @@ Put a file named **`.env` in the repo root** (next to `.git`). Typical variables
 
 | Variable | Role |
 |----------|------|
-| `AI_MODEL` | Gemini model id, e.g. `gemini-2.5-flash`. Set on first run if missing. |
+| `AI_MODEL` | Gemini model id, e.g. `gemini-2.5-flash`. **Optional** — if unset, the tool uses its built-in default for that run without writing anything to `.env`. |
 | `AI_API_KEY` | From [Google AI Studio](https://aistudio.google.com/apikey). |
-| `AI_MODEL_FALLBACKS` | Optional: comma-separated backup models, tried **in order** after `AI_MODEL` on retryable busy/rate-limit errors. If you omit this variable, the tool uses the **default fallbacks** below. |
+| `AI_MODEL_FALLBACKS` | Optional: comma-separated backup models, tried **in order** after `AI_MODEL` when it's busy, overloaded, or not a valid model id. If you omit this variable, the tool uses the **default fallbacks** below. |
+
+You never have to get the model id exactly right: an unset, mistyped, or retired `AI_MODEL` all fall through to the same fallback chain as a busy/rate-limited model, so the tool keeps working even if Google renames or removes a model you had pinned.
 
 **Default `AI_MODEL_FALLBACKS` (when the variable is unset):** `gemini-2.5-flash-lite`, then `gemini-3-flash-preview` — each is tried in sequence after a failed attempt on the previous model in the chain (starting from `AI_MODEL`).
 
@@ -61,7 +63,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ## When AI fails
 
-Wrong key, bad model name, network issues, or quota errors → the tool falls back to local heuristics and shows a warning. On retryable busy/rate-limit errors it steps through the fallback chain: your `AI_MODEL` first, then the models in `AI_MODEL_FALLBACKS` (or the **default** `gemini-2.5-flash-lite` → `gemini-3-flash-preview` list if that variable is unset).
+Wrong key or network/quota errors that survive the whole fallback chain → the tool falls back to local heuristics and shows a warning. A busy/overloaded model *or* a bad/unknown model id steps through the fallback chain instead: your `AI_MODEL` (or the built-in default, if unset) first, then the models in `AI_MODEL_FALLBACKS` (or the **default** `gemini-2.5-flash-lite` → `gemini-3-flash-preview` list if that variable is unset).
 
 ---
 
