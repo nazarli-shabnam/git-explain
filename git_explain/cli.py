@@ -57,10 +57,10 @@ _AI_CALL_ERRORS = (
 def _gemini_fallback_notifier(
     group_label: str | None = None,
 ) -> Callable[[str], None]:
-    """Dim one-line notices when switching models after rate limits / overload.
+    """Dim one-line notices when switching models (busy, overloaded, or unknown model id).
 
     ``group_label`` prefixes the line in split-commit mode (one AI call per group),
-    so repeated "primary busy" messages are distinguishable.
+    so repeated "primary unavailable" messages are distinguishable.
     """
     first: list[bool] = [True]
     prefix = f"{group_label}: " if group_label else ""
@@ -69,14 +69,17 @@ def _gemini_fallback_notifier(
         if first[0]:
             console.print(
                 Text(
-                    f"{prefix}Primary model busy; trying fallback: {next_model}",
+                    f"{prefix}Primary model unavailable; trying fallback: {next_model}",
                     style="dim",
                 )
             )
             first[0] = False
         else:
             console.print(
-                Text(f"{prefix}Model busy; trying fallback: {next_model}", style="dim")
+                Text(
+                    f"{prefix}Model unavailable; trying fallback: {next_model}",
+                    style="dim",
+                )
             )
 
     return _notify
@@ -165,26 +168,6 @@ def _load_ai_env_from_dotenv(dotenv_path: Path) -> None:
             os.environ[key] = val
 
 
-def _upsert_env_var(dotenv_path: Path, key: str, value: str) -> None:
-    lines: list[str] = []
-    if dotenv_path.exists():
-        lines = dotenv_path.read_text(encoding="utf-8").splitlines()
-    replaced = False
-    out: list[str] = []
-    prefix = key + "="
-    for ln in lines:
-        if ln.startswith(prefix):
-            out.append(f"{key}={value}")
-            replaced = True
-        else:
-            out.append(ln)
-    if not replaced:
-        if out and out[-1].strip():
-            out.append("")
-        out.append(f"{key}={value}")
-    dotenv_path.write_text("\n".join(out) + "\n", encoding="utf-8")
-
-
 def _ensure_repo_env_file(repo_env: Path) -> bool:
     if repo_env.is_file():
         return True
@@ -199,11 +182,19 @@ def _ensure_repo_env_file(repo_env: Path) -> bool:
     return True
 
 
-def _choose_and_persist_ai_model(repo_env: Path) -> str:
-    """First run: set default Gemini model and reload .env for API keys."""
+def _announce_default_ai_model() -> str:
+    """First run with no AI_MODEL set: use the built-in default for this run only.
+
+    Nothing is written to ``.env`` — Google renames/retires model ids over
+    time, so pinning one automatically would go stale. Users who want a
+    fixed model can set ``AI_MODEL`` themselves or pass ``--model``.
+    """
     console.print(
         Text(
-            "Add your API key to .env (create one in Google AI Studio if needed):",
+            "No AI_MODEL set — using the default model for this run only "
+            "(nothing written to .env). Add your API key to .env as "
+            "AI_API_KEY (create one in Google AI Studio if needed); set "
+            "AI_MODEL there, or pass --model, to pin a specific model:",
             style="dim",
         )
     )
@@ -215,12 +206,7 @@ def _choose_and_persist_ai_model(repo_env: Path) -> str:
             model_id=DEFAULT_MODEL,
         )
     )
-    model = DEFAULT_MODEL
-    _upsert_env_var(repo_env, "AI_MODEL", model)
-    os.environ["AI_MODEL"] = model
-    if repo_env.is_file():
-        _load_ai_env_from_dotenv(repo_env)
-    return model
+    return DEFAULT_MODEL
 
 
 def _resolve_project_ai_model(repo_env: Path, model_override: str | None) -> str | None:
@@ -231,7 +217,7 @@ def _resolve_project_ai_model(repo_env: Path, model_override: str | None) -> str
         return model
     if not _ensure_repo_env_file(repo_env):
         return None
-    return _choose_and_persist_ai_model(repo_env)
+    return _announce_default_ai_model()
 
 
 def _render_combined(

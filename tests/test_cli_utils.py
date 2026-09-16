@@ -4,7 +4,7 @@ import pytest
 
 from git_explain.gemini import DEFAULT_MODEL
 from git_explain.cli import (
-    _choose_and_persist_ai_model,
+    _announce_default_ai_model,
     _ensure_repo_env_file,
     _group_changes,
     _load_ai_env_from_dotenv,
@@ -12,7 +12,6 @@ from git_explain.cli import (
     _parse_selection,
     _ps_quote,
     _resolve_project_ai_model,
-    _upsert_env_var,
     _validate_suggest_flags,
 )
 
@@ -247,15 +246,6 @@ def test_load_ai_env_from_dotenv_ignores_empty_values(tmp_path, monkeypatch) -> 
     assert os.environ.get("AI_MODEL") == "existing-model"
 
 
-def test_upsert_env_var_appends_and_updates(tmp_path) -> None:
-    env_file = tmp_path / ".env"
-    _upsert_env_var(env_file, "AI_MODEL", DEFAULT_MODEL)
-    _upsert_env_var(env_file, "AI_MODEL", "gemini-2.5-flash-lite")
-    text = env_file.read_text(encoding="utf-8")
-    assert "AI_MODEL=gemini-2.5-flash-lite" in text
-    assert text.count("AI_MODEL=") == 1
-
-
 def test_ensure_repo_env_file_respects_no_choice(tmp_path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     monkeypatch.setattr("typer.prompt", lambda *a, **k: "n")
@@ -269,8 +259,23 @@ def test_resolve_project_ai_model_uses_override(tmp_path) -> None:
     assert m == "gemini-2.5-flash-lite"
 
 
-def test_choose_and_persist_ai_model_default_is_gemini(tmp_path) -> None:
+def test_resolve_project_ai_model_defaults_without_persisting(
+    tmp_path, monkeypatch
+) -> None:
     env_file = tmp_path / ".env"
-    model = _choose_and_persist_ai_model(env_file)
+    monkeypatch.delenv("AI_MODEL", raising=False)
+    monkeypatch.setattr("typer.prompt", lambda *a, **k: "y")
+
+    m = _resolve_project_ai_model(env_file, None)
+
+    assert m == DEFAULT_MODEL
+    assert env_file.is_file()
+    assert env_file.read_text(encoding="utf-8") == ""
+
+
+def test_announce_default_ai_model_does_not_persist(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    model = _announce_default_ai_model()
     assert model == DEFAULT_MODEL
-    assert "AI_MODEL=gemini-2.5-flash" in env_file.read_text(encoding="utf-8")
+    assert env_file.read_text(encoding="utf-8") == ""

@@ -128,6 +128,13 @@ def test_is_retryable_gemini_error_not_generic() -> None:
     assert _is_retryable_gemini_error(ValueError("invalid")) is False
 
 
+def test_is_retryable_gemini_error_unknown_model_404() -> None:
+    err = genai_errors.ClientError(
+        404, {"error": {"message": "models/gemini-bogus is not found"}}, None
+    )
+    assert _is_retryable_gemini_error(err) is True
+
+
 def test_is_generic_message_flags_vague_add_changes() -> None:
     assert _is_generic_message("Add changes") is True
     assert _is_generic_message("Update changes") is True

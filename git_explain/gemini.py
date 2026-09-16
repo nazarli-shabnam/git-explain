@@ -466,19 +466,25 @@ def _model_chain(primary: str) -> list[str]:
 
 
 def _is_retryable_gemini_error(e: BaseException) -> bool:
-    """True for overload / rate limits only (sequential fallback, not generic errors)."""
+    """True for overload/rate-limit errors, and for an unknown/invalid model id.
+
+    The latter covers a model name that no longer exists (Google renamed or
+    retired it) or was mistyped by the user — falling through
+    ``AI_MODEL_FALLBACKS`` can plausibly succeed in both cases, so this is
+    not a generic catch-all.
+    """
     for err in (e, e.__cause__, e.__context__):
         if err is None:
             continue
         if isinstance(err, genai_errors.ClientError):
-            if getattr(err, "code", None) == 429:
+            if getattr(err, "code", None) in (429, 404):
                 return True
         if isinstance(err, genai_errors.ServerError):
             if getattr(err, "code", None) in (503, 502, 504):
                 return True
         if isinstance(err, genai_errors.APIError):
             code = getattr(err, "code", None)
-            if code == 429:
+            if code in (429, 404):
                 return True
             if isinstance(code, int) and 500 <= code < 600:
                 return True
@@ -486,12 +492,15 @@ def _is_retryable_gemini_error(e: BaseException) -> bool:
             if (
                 "RESOURCE_EXHAUSTED" in status.upper()
                 or "UNAVAILABLE" in status.upper()
+                or "NOT_FOUND" in status.upper()
             ):
                 return True
     msg = str(e).lower()
     if "429" in msg or "503" in msg or "resource exhausted" in msg:
         return True
     if "rate limit" in msg or "too many requests" in msg:
+        return True
+    if "not found" in msg and "model" in msg:
         return True
     return False
 

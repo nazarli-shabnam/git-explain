@@ -75,6 +75,37 @@ def test_suggest_commands_retries_fallback_on_rate_limit(monkeypatch) -> None:
     assert sug.commit_type == "FIX"
 
 
+def test_suggest_commands_retries_fallback_on_unknown_model(monkeypatch) -> None:
+    monkeypatch.setenv("AI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_MODEL_FALLBACKS", "gemini-2.5-flash-lite")
+
+    calls: list[str] = []
+
+    def fake(*, model, contents, config):
+        calls.append(model)
+        if model == "gemini-typo-model":
+            raise genai_errors.ClientError(
+                404,
+                {"error": {"message": "models/gemini-typo-model is not found"}},
+                None,
+            )
+        return _FakeResponse('git add a.txt\ngit commit -m "fix: correct the bug"')
+
+    _patch_client(monkeypatch, fake)
+
+    notified: list[str] = []
+    sug, _raw = suggest_commands(
+        _DIFF,
+        model="gemini-typo-model",
+        fallback_notifier=notified.append,
+    )
+
+    assert calls == ["gemini-typo-model", "gemini-2.5-flash-lite"]
+    assert notified == ["gemini-2.5-flash-lite"]
+    assert sug is not None
+    assert sug.commit_type == "FIX"
+
+
 def test_suggest_commands_non_retryable_error_propagates_without_fallback(
     monkeypatch,
 ) -> None:
