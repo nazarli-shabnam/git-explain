@@ -209,12 +209,18 @@ def _announce_default_ai_model() -> str:
     return DEFAULT_MODEL
 
 
-def _resolve_project_ai_model(repo_env: Path, model_override: str | None) -> str | None:
+def _resolve_project_ai_model(
+    repo_env: Path, model_override: str | None, auto: bool = False
+) -> str | None:
+    """``auto`` skips the .env-creation prompt and uses the transient default,
+    matching --auto's "no prompting" contract."""
     if model_override:
         return model_override
     model = (os.environ.get("AI_MODEL") or "").strip()
     if model:
         return model
+    if auto:
+        return DEFAULT_MODEL
     if not _ensure_repo_env_file(repo_env):
         return None
     return _announce_default_ai_model()
@@ -806,7 +812,7 @@ def run(
     if not combined.strip():
         console.print("[yellow]No staged, unstaged, or untracked changes.[/yellow]")
         return
-    ai_model = _resolve_project_ai_model(repo_env, model)
+    ai_model = _resolve_project_ai_model(repo_env, model, auto)
     if repo_env.is_file():
         _load_ai_env_from_dotenv(repo_env)
     has_commits, changes = _parse_combined(combined)

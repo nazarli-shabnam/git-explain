@@ -277,6 +277,17 @@ def test_resolve_project_ai_model_defaults_without_persisting(
     assert env_file.read_text(encoding="utf-8") == ""
 
 
+def test_resolve_project_ai_model_auto_skips_env_prompt(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    monkeypatch.delenv("AI_MODEL", raising=False)
+    monkeypatch.setattr("typer.prompt", _blow_up_prompt)
+
+    m = _resolve_project_ai_model(env_file, None, auto=True)
+
+    assert m == DEFAULT_MODEL
+    assert not env_file.exists()
+
+
 def test_announce_default_ai_model_does_not_persist(tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("", encoding="utf-8")
