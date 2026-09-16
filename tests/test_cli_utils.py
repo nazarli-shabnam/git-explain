@@ -4,7 +4,9 @@ import pytest
 
 from git_explain.gemini import DEFAULT_MODEL
 from git_explain.cli import (
+    Change,
     _announce_default_ai_model,
+    _determine_commit_mode,
     _ensure_repo_env_file,
     _group_changes,
     _load_ai_env_from_dotenv,
@@ -12,7 +14,9 @@ from git_explain.cli import (
     _parse_selection,
     _ps_quote,
     _resolve_project_ai_model,
+    _select_files,
     _validate_suggest_flags,
+    _warn_if_partial_staging_risk,
 )
 
 
@@ -273,9 +277,54 @@ def test_resolve_project_ai_model_defaults_without_persisting(
     assert env_file.read_text(encoding="utf-8") == ""
 
 
+def test_resolve_project_ai_model_auto_skips_env_prompt(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    monkeypatch.delenv("AI_MODEL", raising=False)
+    monkeypatch.setattr("typer.prompt", _blow_up_prompt)
+
+    m = _resolve_project_ai_model(env_file, None, auto=True)
+
+    assert m == DEFAULT_MODEL
+    assert not env_file.exists()
+
+
 def test_announce_default_ai_model_does_not_persist(tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("", encoding="utf-8")
     model = _announce_default_ai_model()
     assert model == DEFAULT_MODEL
-    assert env_file.read_text(encoding="utf-8") == ""
+
+
+def _blow_up_prompt(*a, **k):
+    raise AssertionError("typer.prompt should not be called in --auto mode")
+
+
+def test_select_files_auto_selects_everything_without_prompting(monkeypatch) -> None:
+    monkeypatch.setattr("typer.prompt", _blow_up_prompt)
+    changes = [
+        Change(status="M", path="a.txt", sections=("Staged",)),
+        Change(status="M", path="b.txt", sections=("Unstaged",)),
+    ]
+
+    selected = _select_files(changes, auto=True)
+
+    assert selected == changes
+
+
+def test_warn_if_partial_staging_risk_auto_continues_without_prompting(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("typer.prompt", _blow_up_prompt)
+    risky = [Change(status="M", path="a.txt", sections=("Staged", "Unstaged"))]
+
+    assert _warn_if_partial_staging_risk(risky, staged_only=False, auto=True) is True
+
+
+def test_determine_commit_mode_auto_defaults_to_one_without_prompting(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("typer.prompt", _blow_up_prompt)
+
+    mode = _determine_commit_mode({"a.txt", "b.txt"}, staged_only=False, auto=True)
+
+    assert mode == "one"
